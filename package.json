@@ -1,0 +1,13 @@
+{
+  "name": "agy-sync-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Antigravity native sidecar plugin for multi-device token usage aggregation and quota monitoring",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "sync": "node sidecars/dashboard/sync-cli.mjs",
+    "preview": "node sidecars/dashboard/main.mjs"
+  }
+}
