@@ -68,7 +68,6 @@
       saveBtn: '保存并立即同步',
       savingBtn: '保存中…',
       savedMsg: '已保存并完成同步',
-      detectedPrefix: '已检测目录: ',
       testFolderOk: (files) =>
         `目录可读写。当前发现 ${files.length} 个设备快照${files.length ? `: ${files.join(', ')}` : '（首次同步后生成）'}`,
       testWebdavOk: (ms, files, url) =>
@@ -153,7 +152,6 @@
       saveBtn: 'Save & Sync Now',
       savingBtn: 'Saving…',
       savedMsg: 'Saved and synced',
-      detectedPrefix: 'Detected: ',
       testFolderOk: (files) =>
         `Folder writable. Found ${files.length} device snapshot(s)${files.length ? `: ${files.join(', ')}` : ''}`,
       testWebdavOk: (ms, files, url) =>
@@ -187,7 +185,139 @@
     settingsDirty: false,
     selectedSyncMode: 'folder',
     clearPassword: false,
+    hostThemeHint: null,
+    lastThemeSig: '',
   };
+
+  const probeCtx = (() => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = 1;
+      c.height = 1;
+      return c.getContext('2d', { willReadFrequently: true });
+    } catch {
+      return null;
+    }
+  })();
+
+  function parseCssColor(val) {
+    if (!val || typeof val !== 'string' || !probeCtx) return null;
+    let trimmed = val.trim();
+    if (!trimmed) return null;
+    if (/^\d+(?:\.\d+)?\s+\d+(?:\.\d+)?%\s+\d+(?:\.\d+)?%$/.test(trimmed)) {
+      trimmed = `hsl(${trimmed})`;
+    }
+    probeCtx.clearRect(0, 0, 1, 1);
+    probeCtx.fillStyle = 'rgba(0,0,0,0)';
+    probeCtx.fillStyle = trimmed;
+    if (probeCtx.fillStyle === 'rgba(0, 0, 0, 0)' && trimmed !== 'transparent') {
+      return null;
+    }
+    probeCtx.fillRect(0, 0, 1, 1);
+    const data = probeCtx.getImageData(0, 0, 1, 1).data;
+    if (data[3] < 10) return null;
+    return { css: trimmed, r: data[0], g: data[1], b: data[2], a: data[3] / 255 };
+  }
+
+  function luminance(rgb) {
+    const lin = (c) => {
+      const v = c / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * lin(rgb.r) + 0.7152 * lin(rgb.g) + 0.0722 * lin(rgb.b);
+  }
+
+  function contrastRatio(c1, c2) {
+    const l1 = luminance(c1);
+    const l2 = luminance(c2);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  }
+
+  function syncHostTheme(hostThemeHint) {
+    if (hostThemeHint !== undefined) {
+      state.hostThemeHint = hostThemeHint;
+    }
+    const hint = state.hostThemeHint;
+    const root = document.documentElement;
+    const cs = getComputedStyle(root);
+    const bgRaw = cs.getPropertyValue('--background').trim();
+    const fgRaw = cs.getPropertyValue('--foreground').trim();
+    const primaryRaw = cs.getPropertyValue('--primary').trim();
+
+    const sig = `${bgRaw}|${fgRaw}|${primaryRaw}|${hint?.mode || ''}`;
+    if (sig === state.lastThemeSig && root.dataset.theme) return;
+    state.lastThemeSig = sig;
+
+    const bgParsed = parseCssColor(bgRaw);
+    const fgParsed = parseCssColor(fgRaw);
+    const primaryParsed = parseCssColor(primaryRaw);
+
+    let isDark = true;
+    if (bgParsed) {
+      isDark = luminance(bgParsed) < 0.45;
+    } else if (hint?.mode === 'light') {
+      isDark = false;
+    } else if (hint?.mode === 'dark') {
+      isDark = true;
+    } else if (window.matchMedia) {
+      isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+
+    root.dataset.theme = isDark ? 'dark' : 'light';
+
+    const resolvedBg = bgParsed ? bgParsed.css : isDark ? '#14161d' : '#f6f7fb';
+    const bgRef = bgParsed || (isDark ? { r: 20, g: 22, b: 29 } : { r: 246, g: 247, b: 251 });
+    const fgOk = fgParsed && contrastRatio(bgRef, fgParsed) >= 4.5;
+    const resolvedFg = fgOk ? fgParsed.css : isDark ? '#f1f3f9' : '#171923';
+
+    let resolvedAccent = isDark ? '#7c5cff' : '#5b46f6';
+    let onAccent = '#ffffff';
+    if (primaryParsed) {
+      const chroma = Math.max(primaryParsed.r, primaryParsed.g, primaryParsed.b) -
+        Math.min(primaryParsed.r, primaryParsed.g, primaryParsed.b);
+      if (chroma >= 24 && contrastRatio(bgRef, primaryParsed) >= 2.2) {
+        resolvedAccent = primaryParsed.css;
+        onAccent = luminance(primaryParsed) > 0.42 ? '#111318' : '#ffffff';
+      }
+    }
+
+    root.style.setProperty('--agy-host-bg', resolvedBg);
+    root.style.setProperty('--agy-host-fg', resolvedFg);
+    root.style.setProperty('--agy-host-accent', resolvedAccent);
+    root.style.setProperty('--agy-host-on-accent', onAccent);
+
+    if (document.body) {
+      document.body.style.backgroundColor = resolvedBg;
+      document.body.style.color = resolvedFg;
+    }
+  }
+
+  function watchHostTheme() {
+    syncHostTheme();
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'theme-change') {
+        requestAnimationFrame(() => syncHostTheme());
+      }
+    });
+    if (typeof MutationObserver !== 'undefined') {
+      let scheduled = false;
+      const obs = new MutationObserver(() => {
+        if (scheduled) return;
+        scheduled = true;
+        requestAnimationFrame(() => {
+          scheduled = false;
+          syncHostTheme();
+        });
+      });
+      obs.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    }
+    if (window.matchMedia) {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      if (typeof mq.addEventListener === 'function') {
+        mq.addEventListener('change', () => syncHostTheme());
+      }
+    }
+  }
 
   function t() {
     return I18N[state.lang] || I18N['zh-CN'];
@@ -772,6 +902,7 @@
 
   function renderAll(data, opts) {
     state.dashboard = data;
+    syncHostTheme(data?.hostTheme);
     if (data?.settings?.language && (data.settings.language === 'zh-CN' || data.settings.language === 'en')) {
       state.lang = data.settings.language;
     }
@@ -975,6 +1106,7 @@
     });
   }
 
+  watchHostTheme();
   setupTabs();
   setupActions();
   void loadDashboard().catch((err) => {

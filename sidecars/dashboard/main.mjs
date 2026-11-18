@@ -101,6 +101,7 @@ function buildThemeCss(theme) {
 
   return `:root {
   color-scheme: ${mode};
+  --theme-mode: ${mode};
   --theme-bg: ${bg};
   --theme-surface: ${surface};
   --theme-surface-2: ${surface2};
@@ -108,19 +109,8 @@ function buildThemeCss(theme) {
   --theme-muted: ${muted};
   --theme-border: ${border};
   --theme-accent: ${accent};
-  --bg: var(--background, var(--theme-bg));
-  --surface: var(--card, var(--theme-surface));
-  --surface-2: var(--secondary, var(--theme-surface-2));
-  --fg: var(--foreground, var(--theme-fg));
-  --muted: var(--muted-foreground, var(--theme-muted));
-  --border: var(--card-border, var(--theme-border));
-  --accent: var(--primary, var(--theme-accent));
-  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
-  --ok: #22c55e;
-  --warn: #f59e0b;
-  --danger: #ef4444;
-  --font-sans: var(--font-family, ${font}system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
-  --font-mono: var(--editor-font-family, ${mono}ui-monospace, "Cascadia Mono", Consolas, monospace);
+  --theme-font-sans: ${font}system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --theme-font-mono: ${mono}ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 `;
 }
