@@ -1,0 +1,6 @@
+name: agy_sync_dashboard
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10

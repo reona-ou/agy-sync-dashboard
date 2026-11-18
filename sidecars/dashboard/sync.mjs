@@ -10,7 +10,12 @@ import { WebDavSyncClient, normalizeWebDavConfig, redactWebDavConfig } from './w
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
 export const VALID_SYNC_MODES = ['folder', 'webdav', 'both', 'local-only'];
+export const SUPPORTED_LANGUAGES = ['zh-CN', 'en', 'ja'];
 const DEFAULT_SYNC_INTERVAL_MS = 30_000;
+
+export function normalizeLanguage(lang) {
+  return SUPPORTED_LANGUAGES.includes(lang) ? lang : 'zh-CN';
+}
 
 async function writeConfigJsonSecure(file, obj) {
   await fsp.writeFile(file, JSON.stringify(obj, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
@@ -29,7 +34,7 @@ export function sanitizeSettingsForClient(config = {}) {
     syncDir: config.syncDir || '',
     webdav: redactWebDavConfig(config.webdav || {}),
     deviceName: config.deviceName || '',
-    language: config.language === 'en' ? 'en' : 'zh-CN',
+    language: normalizeLanguage(config.language),
     syncIntervalMs: Number(config.syncIntervalMs || DEFAULT_SYNC_INTERVAL_MS),
     updatedAt: Number(config.updatedAt || 0),
   };
@@ -289,7 +294,7 @@ export class SyncManager {
     if (typeof patch.deviceName === 'string' && patch.deviceName.trim()) {
       nextConfig.deviceName = patch.deviceName.trim();
     }
-    if (patch.language === 'zh-CN' || patch.language === 'en') {
+    if (SUPPORTED_LANGUAGES.includes(patch.language)) {
       nextConfig.language = patch.language;
     }
     if (typeof patch.syncIntervalMs === 'number' && Number.isFinite(patch.syncIntervalMs)) {

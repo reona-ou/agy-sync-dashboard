@@ -26,15 +26,22 @@ function execFilePromise(file, args, options = {}) {
   });
 }
 
-export async function pickNativeFolder(initialDir = '') {
+const FOLDER_PICKER_PROMPTS = {
+  'zh-CN': '选择跨设备同步文件夹',
+  en: 'Select Antigravity Sync Folder',
+  ja: 'マルチデバイス同期フォルダを選択',
+};
+
+export async function pickNativeFolder(initialDir = '', lang = 'zh-CN') {
   const safeInit = initialDir && fs.existsSync(initialDir) ? path.resolve(initialDir) : '';
+  const promptText = FOLDER_PICKER_PROMPTS[lang] || FOLDER_PICKER_PROMPTS.en;
   if (process.platform === 'win32') {
     const psScript = [
       'Add-Type -AssemblyName System.Windows.Forms;',
       '$f = New-Object System.Windows.Forms.Form;',
       '$f.TopMost = $true;',
       '$d = New-Object System.Windows.Forms.FolderBrowserDialog;',
-      '$d.Description = "选择跨设备同步文件夹";',
+      '$d.Description = if ($env:AGY_PICKER_PROMPT) { $env:AGY_PICKER_PROMPT } else { "Select Antigravity Sync Folder" };',
       '$d.ShowNewFolderButton = $true;',
       'if ($env:AGY_INIT_DIR -and (Test-Path $env:AGY_INIT_DIR)) { $d.SelectedPath = $env:AGY_INIT_DIR };',
       'if ($d.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }',
@@ -43,7 +50,7 @@ export async function pickNativeFolder(initialDir = '') {
       const { stdout } = await execFilePromise(
         'powershell.exe',
         ['-NoProfile', '-Sta', '-NonInteractive', '-Command', psScript],
-        { env: { ...process.env, AGY_INIT_DIR: safeInit }, windowsHide: true }
+        { env: { ...process.env, AGY_INIT_DIR: safeInit, AGY_PICKER_PROMPT: promptText }, windowsHide: true }
       );
       const selected = String(stdout || '').trim();
       return selected ? { cancelled: false, path: selected } : { cancelled: true, path: '' };
@@ -56,7 +63,7 @@ export async function pickNativeFolder(initialDir = '') {
     try {
       const { stdout } = await execFilePromise('osascript', [
         '-e',
-        'POSIX path of (choose folder with prompt "Select Antigravity Sync Folder")',
+        `POSIX path of (choose folder with prompt "${promptText.replace(/"/g, '\\"')}")`,
       ]);
       const selected = String(stdout || '').trim().replace(/\/+$/, '');
       return selected ? { cancelled: false, path: selected } : { cancelled: true, path: '' };
@@ -66,7 +73,7 @@ export async function pickNativeFolder(initialDir = '') {
   }
 
   for (const [bin, args] of [
-    ['zenity', ['--file-selection', '--directory', '--title=Select Sync Folder']],
+    ['zenity', ['--file-selection', '--directory', `--title=${promptText}`]],
     ['kdialog', ['--getexistingdirectory', safeInit || process.env.HOME || '.']],
   ]) {
     try {
@@ -110,7 +117,7 @@ function buildThemeCss(theme) {
   --theme-muted: ${muted};
   --theme-border: ${border};
   --theme-accent: ${accent};
-  --theme-font-sans: ${font}system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --theme-font-sans: ${font}system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
   --theme-font-mono: ${mono}ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 `;
@@ -368,7 +375,7 @@ export function createStandaloneHttpServer(service, options = {}) {
           if (raw.length > 4096) break;
         }
         const parsed = raw ? JSON.parse(raw) : {};
-        sendJson(200, await pickNativeFolder(parsed.initialDir || ''));
+        sendJson(200, await pickNativeFolder(parsed.initialDir || '', parsed.language || 'zh-CN'));
         return;
       }
 
@@ -634,7 +641,7 @@ async function startRuntime() {
     );
     app.api(
       '/api/settings/pick-folder',
-      async (data) => pickNativeFolder(data?.initialDir || ''),
+      async (data) => pickNativeFolder(data?.initialDir || '', data?.language || 'zh-CN'),
       'POST'
     );
 

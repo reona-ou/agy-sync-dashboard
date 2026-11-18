@@ -15,7 +15,10 @@ import uuid
 from pathlib import Path
 
 PLUGIN_ID = "agy-sync-dashboard"
+CONDA_ENV_NAME = "agy_sync_dashboard"
+SUPPORTED_LANGUAGES = ("zh-CN", "en", "ja")
 REPO_ROOT = Path(__file__).resolve().parent
+ENVIRONMENT_YML = REPO_ROOT / "environment.yml"
 RUNTIME_ITEMS = [
     "plugin.json",
     "hooks.json",
@@ -25,6 +28,165 @@ RUNTIME_ITEMS = [
     "hooks",
     "sidecars",
 ]
+
+
+def is_running_in_conda_env(env_name: str = CONDA_ENV_NAME) -> bool:
+    try:
+        return Path(sys.prefix).name == env_name
+    except OSError:
+        return False
+
+
+def _env_python_path(env_prefix: Path) -> Path:
+    if sys.platform == "win32":
+        return env_prefix / "python.exe"
+    return env_prefix / "bin" / "python"
+
+
+def find_conda_executable() -> str | None:
+    env_exe = os.environ.get("CONDA_EXE")
+    if env_exe:
+        try:
+            if Path(env_exe).is_file():
+                return str(Path(env_exe))
+        except OSError:
+            pass
+
+    which_conda = shutil.which("conda")
+    if which_conda:
+        return which_conda
+
+    home = Path.home()
+    candidates: list[Path] = []
+    if sys.platform == "win32":
+        local = Path(os.environ.get("LOCALAPPDATA") or (home / "AppData" / "Local"))
+        for base in [
+            home / "miniconda3",
+            home / "anaconda3",
+            home / "miniforge3",
+            home / "mambaforge",
+            local / "miniconda3",
+            local / "anaconda3",
+            local / "miniforge3",
+            Path("C:/ProgramData/miniconda3"),
+            Path("C:/ProgramData/anaconda3"),
+            Path("D:/miniconda3"),
+            Path("D:/anaconda3"),
+            Path("D:/conda"),
+        ]:
+            candidates.append(base / "condabin" / "conda.bat")
+            candidates.append(base / "Scripts" / "conda.exe")
+    else:
+        for base in [
+            home / "miniconda3",
+            home / "anaconda3",
+            home / "miniforge3",
+            home / "mambaforge",
+            Path("/opt/conda"),
+            Path("/opt/homebrew/Caskroom/miniconda/base"),
+            Path("/usr/local/Caskroom/miniconda/base"),
+        ]:
+            candidates.append(base / "bin" / "conda")
+
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return str(cand)
+        except OSError:
+            continue
+    return None
+
+
+def find_conda_env_python(conda_exe: str | None = None, env_name: str = CONDA_ENV_NAME) -> Path | None:
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        try:
+            p = Path(conda_prefix)
+            if p.name == env_name:
+                py = _env_python_path(p)
+                if py.is_file():
+                    return py
+        except OSError:
+            pass
+
+    exe = conda_exe or find_conda_executable()
+    if not exe:
+        return None
+
+    try:
+        proc = subprocess.run(
+            [exe, "env", "list", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if proc.returncode != 0 or not proc.stdout:
+            return None
+        payload = json.loads(proc.stdout)
+        for raw_env in payload.get("envs", []):
+            env_path = Path(raw_env)
+            if env_path.name == env_name:
+                py = _env_python_path(env_path)
+                if py.is_file():
+                    return py
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return None
+    return None
+
+
+def ensure_conda_env(
+    conda_exe: str | None = None,
+    env_name: str = CONDA_ENV_NAME,
+    env_yml: Path = ENVIRONMENT_YML,
+    log_stream=None,
+) -> Path | None:
+    exe = conda_exe or find_conda_executable()
+    if not exe:
+        return None
+
+    existing = find_conda_env_python(exe, env_name)
+    if existing:
+        return existing
+
+    stream = log_stream if log_stream is not None else sys.stderr
+    print(f"[agy-sync] Creating isolated Conda environment '{env_name}'...", file=stream, flush=True)
+    if env_yml.is_file() and env_name == CONDA_ENV_NAME:
+        cmd = [exe, "env", "create", "-f", str(env_yml), "-y"]
+    elif env_yml.is_file():
+        cmd = [exe, "env", "create", "-n", env_name, "-f", str(env_yml), "-y"]
+    else:
+        cmd = [exe, "create", "-n", env_name, "python>=3.10", "-y"]
+
+    proc = subprocess.run(cmd, stdout=stream, stderr=stream, check=False)
+    if proc.returncode != 0:
+        return None
+    return find_conda_env_python(exe, env_name)
+
+
+def maybe_reexec_in_conda(argv: list[str]) -> int | None:
+    if "--no-conda" in argv or os.environ.get("AGY_SYNC_NO_CONDA_REEXEC") == "1":
+        return None
+    if is_running_in_conda_env():
+        return None
+    conda_exe = find_conda_executable()
+    if not conda_exe:
+        return None
+    env_py = ensure_conda_env(conda_exe, log_stream=sys.stderr)
+    if not env_py:
+        return None
+    try:
+        if env_py.resolve() == Path(sys.executable).resolve():
+            return None
+    except OSError:
+        pass
+
+    env = os.environ.copy()
+    env["AGY_SYNC_NO_CONDA_REEXEC"] = "1"
+    env["CONDA_DEFAULT_ENV"] = CONDA_ENV_NAME
+    env["CONDA_PREFIX"] = str(env_py.parent if sys.platform == "win32" else env_py.parent.parent)
+    proc = subprocess.run([str(env_py), str(Path(__file__).resolve()), *argv], env=env, check=False)
+    return proc.returncode
 
 
 def resolve_home(home_override: str | None = None) -> Path:
@@ -242,7 +404,7 @@ def ensure_local_settings(
         cfg["deviceName"] = device.get("deviceName") or socket.gethostname()
         changed = True
 
-    if language in ("zh-CN", "en"):
+    if language in SUPPORTED_LANGUAGES:
         cfg["language"] = language
         changed = True
     elif not cfg.get("language"):
@@ -281,9 +443,11 @@ def build_status(paths: dict[str, Path]) -> dict:
             )
 
     plugin_meta = read_json(plugin_dir / "plugin.json", {}) if installed else read_json(REPO_ROOT / "plugin.json", {})
+    conda_exe = find_conda_executable()
+    conda_py = find_conda_env_python(conda_exe) if conda_exe else None
     return {
         "plugin": PLUGIN_ID,
-        "version": plugin_meta.get("version", "1.0.0"),
+        "version": plugin_meta.get("version", "1.1.0"),
         "installed": installed,
         "enabled": enabled,
         "pluginDir": str(plugin_dir),
@@ -304,7 +468,47 @@ def build_status(paths: dict[str, Path]) -> dict:
         "detectedSyncCandidates": detect_sync_candidates(paths["home"]),
         "nodeExecutable": find_node_executable(paths["home"]),
         "conversationsDbExists": paths["conversations_dir"].is_dir(),
+        "condaEnvName": CONDA_ENV_NAME,
+        "condaExecutable": conda_exe,
+        "condaEnvPython": str(conda_py) if conda_py else None,
+        "currentPython": sys.executable,
+        "runningInIsolatedEnv": is_running_in_conda_env(),
     }
+
+
+def cmd_ensure_env(_args: argparse.Namespace) -> int:
+    conda_exe = find_conda_executable()
+    if not conda_exe:
+        print(
+            json.dumps(
+                {
+                    "action": "ensure-env",
+                    "ok": False,
+                    "envName": CONDA_ENV_NAME,
+                    "error": "Conda executable not found",
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    env_py = ensure_conda_env(conda_exe, log_stream=sys.stderr)
+    ok = bool(env_py and env_py.is_file())
+    print(
+        json.dumps(
+            {
+                "action": "ensure-env",
+                "ok": ok,
+                "envName": CONDA_ENV_NAME,
+                "condaExecutable": conda_exe,
+                "python": str(env_py) if env_py else None,
+                "runningInIsolatedEnv": is_running_in_conda_env(),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    return 0 if ok else 1
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -423,7 +627,11 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage Antigravity Sync Dashboard plugin")
     parser.add_argument("--home", default=None, help="Override home directory (primarily for isolated tests)")
+    parser.add_argument("--no-conda", action="store_true", help="Do not auto-switch into the agy_sync_dashboard Conda env")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_env = sub.add_parser("ensure-env", help="Create or verify the isolated agy_sync_dashboard Conda environment")
+    p_env.set_defaults(func=cmd_ensure_env)
 
     p_install = sub.add_parser("install", help="Install plugin into ~/.gemini/config/plugins and enable it")
     p_install.add_argument("--sync-mode", choices=["folder", "webdav", "both", "local-only"], default=None, help="Sync transport mode")
@@ -432,7 +640,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--webdav-path", default=None, help="WebDAV remote subdirectory (default /agy-sync-dashboard)")
     p_install.add_argument("--webdav-user", default=None, help="WebDAV username")
     p_install.add_argument("--device-name", default=None, help="Display name for this machine")
-    p_install.add_argument("--language", choices=["zh-CN", "en"], default=None, help="UI language")
+    p_install.add_argument("--language", choices=list(SUPPORTED_LANGUAGES), default=None, help="UI language (zh-CN, en, ja)")
     p_install.set_defaults(func=cmd_install)
 
     p_enable = sub.add_parser("enable", help="Enable installed plugin")
@@ -470,4 +678,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    reexec_rc = maybe_reexec_in_conda(sys.argv[1:])
+    if reexec_rc is not None:
+        raise SystemExit(reexec_rc)
     raise SystemExit(main())

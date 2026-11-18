@@ -1,10 +1,12 @@
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -101,6 +103,35 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertFalse(data_dir.exists())
             self.assertTrue(peer_file.is_file())
+
+    def test_trilingual_ja_and_conda_env_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            rc, res = run_manage("--home", str(home), "install", "--language", "ja")
+            self.assertEqual(rc, 0)
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["status"]["language"], "ja")
+            self.assertEqual(res["status"]["condaEnvName"], "agy_sync_dashboard")
+            self.assertIn("runningInIsolatedEnv", res["status"])
+
+            # Verify ensure_conda_env detects an existing agy_sync_dashboard prefix cleanly
+            fake_env = tmp_path / "envs" / "agy_sync_dashboard"
+            fake_py = fake_env / ("python.exe" if sys.platform == "win32" else "bin/python")
+            fake_py.parent.mkdir(parents=True, exist_ok=True)
+            fake_py.write_text("", encoding="utf-8")
+
+            class FakeProc:
+                returncode = 0
+                stdout = json.dumps({"envs": [str(fake_env)]})
+
+            with patch.dict(os.environ, {"CONDA_PREFIX": ""}), patch.object(
+                manage.subprocess, "run", return_value=FakeProc()
+            ):
+                detected = manage.find_conda_env_python(conda_exe="conda")
+                self.assertEqual(detected, fake_py)
+                ensured = manage.ensure_conda_env(conda_exe="conda")
+                self.assertEqual(ensured, fake_py)
 
 
 if __name__ == "__main__":

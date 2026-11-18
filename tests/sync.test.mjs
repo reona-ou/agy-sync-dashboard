@@ -490,6 +490,33 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
     await fetch(`${base}/api/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const ver2 = await (await fetch(`${base}/api/version`)).json();
     assert.ok(ver2.revision >= ver1.revision);
+    // Verify language persistence for zh-CN / en / ja and fallback for invalid value
+    const jaRes = await (
+      await fetch(`${base}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: 'ja' }),
+      })
+    ).json();
+    assert.equal(jaRes.settings.language, 'ja');
+
+    const invalidLangRes = await (
+      await fetch(`${base}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: 'fr' }),
+      })
+    ).json();
+    assert.equal(invalidLangRes.settings.language, 'ja');
+
+    // Verify HTML & frontend bundle expose trilingual options (zh-CN / en / ja)
+    const htmlBody = await (await fetch(`${base}/`)).text();
+    assert.match(htmlBody, /value="zh-CN"/);
+    assert.match(htmlBody, /value="en"/);
+    assert.match(htmlBody, /value="ja"/);
+    const appJsBody = await (await fetch(`${base}/app.js`)).text();
+    assert.match(appJsBody, /\bja:\s*\{/);
+
     // Verify fresh SyncManager keeps all sync configs blank (local-only) by default
     const freshDataDir = path.join(tmpRoot, 'fresh-data');
     const freshMgr = new SyncManager({

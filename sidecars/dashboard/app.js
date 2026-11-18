@@ -11,6 +11,10 @@
       title: 'Sync Dashboard',
       syncBtn: '同步',
       syncingBtn: '同步中…',
+      syncBtnTitle: '立即同步',
+      tablistAria: '仪表盘视图',
+      loadingMsg: '正在加载本机与多设备数据…',
+      loadFailed: '加载仪表盘数据失败',
       tabs: { overview: '总览', devices: '设备', models: '模型', settings: '设置' },
       badgeSynced: (n) => `${n} 台设备已合并`,
       badgeLocalOnly: '仅本机模式',
@@ -43,6 +47,7 @@
       allTimeLabel: '历史总计',
       cacheRateLabel: '综合缓存命中率',
       devicesLabel: '同步设备 / 会话数',
+      deviceCountTag: (n) => `${n} 台设备`,
       latestGenTitle: '本机最近一次生成',
       trendTitle: '近 14 天多设备趋势',
       recentTitle: '最近对话 (跨设备)',
@@ -60,6 +65,7 @@
       modeBoth: '目录 + WebDAV',
       modeLocal: '仅本机',
       folderSectionTitle: '本地 / Syncthing / 网盘同步目录',
+      syncDirPlaceholder: '选择或输入同步目录路径',
       pickFolderBtn: '选择目录…',
       pickingBtn: '选择中…',
       testFolderBtn: '测试目录',
@@ -67,6 +73,7 @@
       testWebdavBtn: '测试连接',
       testingBtn: '测试中…',
       presetsLabel: '常用模板:',
+      presetJianguoyun: '坚果云',
       labelDavUrl: '服务器地址 (URL)',
       labelDavPath: '远端同步子目录',
       labelDavUser: '用户名',
@@ -111,6 +118,10 @@
       title: 'Sync Dashboard',
       syncBtn: 'Sync',
       syncingBtn: 'Syncing…',
+      syncBtnTitle: 'Sync Now',
+      tablistAria: 'Dashboard views',
+      loadingMsg: 'Loading local & multi-device usage data…',
+      loadFailed: 'Failed to load dashboard',
       tabs: { overview: 'Overview', devices: 'Devices', models: 'Models', settings: 'Settings' },
       badgeSynced: (n) => `${n} devices merged`,
       badgeLocalOnly: 'Local only',
@@ -143,6 +154,7 @@
       allTimeLabel: 'All-Time Sum',
       cacheRateLabel: 'Blended Cache Hit',
       devicesLabel: 'Devices / Conversations',
+      deviceCountTag: (n) => `${n} devices`,
       latestGenTitle: 'Latest Local Generation',
       trendTitle: '14-Day Multi-Device Trend',
       recentTitle: 'Recent Conversations (All Devices)',
@@ -160,6 +172,7 @@
       modeBoth: 'Folder + WebDAV',
       modeLocal: 'Local Only',
       folderSectionTitle: 'Local / Syncthing / Cloud Folder',
+      syncDirPlaceholder: 'Select or enter sync folder path',
       pickFolderBtn: 'Browse…',
       pickingBtn: 'Opening…',
       testFolderBtn: 'Test Folder',
@@ -167,6 +180,7 @@
       testWebdavBtn: 'Test Connection',
       testingBtn: 'Testing…',
       presetsLabel: 'Presets:',
+      presetJianguoyun: 'Jianguoyun',
       labelDavUrl: 'Server URL',
       labelDavPath: 'Remote Subdirectory',
       labelDavUser: 'Username',
@@ -206,6 +220,113 @@
       minsAgo: (m) => `${m}m ago`,
       hoursAgo: (h) => `${h}h ago`,
       daysAgo: (d) => `${d}d ago`,
+    },
+    ja: {
+      title: 'Sync Dashboard',
+      syncBtn: '同期',
+      syncingBtn: '同期中…',
+      syncBtnTitle: '今すぐ同期',
+      tablistAria: 'ダッシュボードビュー',
+      loadingMsg: 'ローカルおよびマルチデバイスデータを読み込み中…',
+      loadFailed: 'ダッシュボードの読み込みに失敗しました',
+      tabs: { overview: '概要', devices: 'デバイス', models: 'モデル', settings: '設定' },
+      badgeSynced: (n) => `${n} 台を統合済み`,
+      badgeLocalOnly: 'ローカルのみ',
+      badgeSyncErr: '同期エラー',
+      quotaTitle: 'アカウントリアルタイム枠 (RPC)',
+      quotaNote: 'アカウント別集計',
+      quotaOffline: '稼働中のローカル Antigravity サービスが見つかりません。枠情報は現在利用できません。',
+      quotaWin5h: '5時間枠',
+      quotaWinWeekly: '週間枠',
+      quotaResetIn: (t) => `リセットまで ${t}`,
+      quotaDisabled: '利用不可',
+      fcCurrUsed: (v) => `今周期 ${v}`,
+      fcPrevUsed: (v) => `前周期 ${v}`,
+      fcEstRem: (v) => `推定残量 ~${v}`,
+      fcEstRemNone: '推定残量 --',
+      fcRateBasis: {
+        'curr+prev': '今周期+前周期',
+        curr: '今周期',
+        prev: '前周期',
+        none: '消費なし',
+      },
+      fcRunwaySafe: (d) => `残り ~${d}（リセットまで持続）`,
+      fcRunwayRisk: (d) => `残り ~${d}（リセット前に枯渇の可能性）`,
+      fcRunwayNeutral: (d) => `残り ~${d}`,
+      fcRunwayDepleted: '枯渇済み（リセット待ち）',
+      fcRunwayInsufficient: '予測に必要な消費データが不足しています',
+      fcRateTip: (rate, basis) => `平均消費速度 ${rate}/h（根拠：${basis}）`,
+      totalsTitle: 'マルチデバイス累計使用量',
+      todayLabel: '本日の累計',
+      allTimeLabel: '全期間合計',
+      cacheRateLabel: '統合キャッシュヒット率',
+      devicesLabel: '同期デバイス / 会話数',
+      deviceCountTag: (n) => `${n} 台`,
+      latestGenTitle: 'ローカル最新生成',
+      trendTitle: '直近14日間のマルチデバイス推移',
+      recentTitle: '最近の会話 (全デバイス)',
+      devicesTitle: '統合済みデバイス一覧',
+      modelsTitle: 'モデル別使用量 (統合)',
+      noData: '統計データがまだありません。ローカル会話または同期ディレクトリを確認してください。',
+      currentDevice: 'この端末',
+      staleBadge: '24時間以上未更新',
+      conflictWarning: (files) =>
+        `${files.length} 件の Syncthing 競合ファイル (${files.join(', ')}) を検出し、自動的に除外しました。同期ディレクトリ内の不要な競合コピーを削除することをおすすめします。`,
+      settingsTitle: 'マルチデバイス同期設定',
+      labelSyncMode: '同期方式',
+      modeFolder: '同期フォルダ',
+      modeWebdav: 'WebDAV',
+      modeBoth: 'フォルダ + WebDAV',
+      modeLocal: 'ローカルのみ',
+      folderSectionTitle: 'ローカル / Syncthing / クラウドフォルダ',
+      syncDirPlaceholder: '同期フォルダのパスを選択または入力',
+      pickFolderBtn: '選択…',
+      pickingBtn: '選択中…',
+      testFolderBtn: 'フォルダテスト',
+      webdavSectionTitle: 'WebDAV クラウド同期',
+      testWebdavBtn: '接続テスト',
+      testingBtn: 'テスト中…',
+      presetsLabel: 'テンプレート:',
+      presetJianguoyun: 'Jianguoyun (堅果雲)',
+      labelDavUrl: 'サーバー URL',
+      labelDavPath: 'リモートサブディレクトリ',
+      labelDavUser: 'ユーザー名',
+      labelDavPass: 'パスワード / アプリパスワード',
+      passPlaceholderNew: 'パスワード / アプリパスワードを入力',
+      passPlaceholderSaved: '保存済み（空欄で現状維持）',
+      passSavedHint: 'パスワードはローカルに安全保存されています。空欄のまま保存すると変更されません。',
+      passClearedMsg: '保存時にパスワードが削除されます。',
+      clearPassBtn: 'クリア',
+      prefsSectionTitle: 'デバイスと環境設定',
+      labelSyncDir: '同期フォルダパス (Syncthing / クラウド)',
+      labelDeviceName: 'この端末の表示名',
+      labelInterval: '自動更新間隔 (秒)',
+      labelLang: '表示言語',
+      saveBtn: '保存して今すぐ同期',
+      savingBtn: '保存中…',
+      savedMsg: '保存して同期しました',
+      testFolderOk: (files) =>
+        `フォルダは読み書き可能です。デバイススナップショット ${files.length} 件を検出${files.length ? `: ${files.join(', ')}` : '（初回同期後に生成されます）'}`,
+      testWebdavOk: (ms, files, url) =>
+        `WebDAV 接続成功 (${ms} ms) · ディレクトリ: ${url} · リモートスナップショット (${files.length}): ${files.length ? files.join(', ') : 'なし'}`,
+      testFail: (msg) => `テスト失敗: ${msg}`,
+      diagSyncDir: '同期フォルダ',
+      diagRemoteDir: 'WebDAV フォルダ',
+      diagSnapshot: 'ローカルスナップショット',
+      diagLastSync: '最終同期',
+      diagSyncError: '同期エラー',
+      inTok: '入力',
+      outTok: '出力',
+      cacheTok: 'キャッシュ',
+      gens: '回生成',
+      convs: '会話',
+      share: '割合',
+      todayShort: '本日',
+      totalShort: '累計',
+      justNow: 'たった今',
+      minsAgo: (m) => `${m} 分前`,
+      hoursAgo: (h) => `${h} 時間前`,
+      daysAgo: (d) => `${d} 日前`,
     },
   };
 
@@ -504,24 +625,35 @@
 
   function applyStaticLabels() {
     const dict = t();
+    document.documentElement.lang = state.lang;
     document.getElementById('ui-title').textContent = dict.title;
+    const syncBtnEl = document.getElementById('btn-sync');
+    syncBtnEl.setAttribute('aria-label', dict.syncBtnTitle);
+    syncBtnEl.setAttribute('title', dict.syncBtnTitle);
     document.getElementById('ui-sync-label').textContent = state.syncing ? dict.syncingBtn : dict.syncBtn;
+    const tablistEl = document.getElementById('ui-tablist');
+    if (tablistEl) tablistEl.setAttribute('aria-label', dict.tablistAria);
+    const loadingEl = document.getElementById('ui-loading');
+    if (loadingEl) loadingEl.textContent = dict.loadingMsg;
     document.getElementById('tab-overview').textContent = dict.tabs.overview;
     document.getElementById('tab-devices').textContent = dict.tabs.devices;
     document.getElementById('tab-models').textContent = dict.tabs.models;
     document.getElementById('tab-settings').textContent = dict.tabs.settings;
     document.getElementById('ui-settings-title').textContent = dict.settingsTitle;
     document.getElementById('ui-label-syncmode').textContent = dict.labelSyncMode;
+    document.getElementById('sync-mode-group').setAttribute('aria-label', dict.labelSyncMode);
     document.getElementById('mode-btn-folder').textContent = dict.modeFolder;
     document.getElementById('mode-btn-webdav').textContent = dict.modeWebdav;
     document.getElementById('mode-btn-both').textContent = dict.modeBoth;
     document.getElementById('mode-btn-local').textContent = dict.modeLocal;
     document.getElementById('ui-folder-section-title').textContent = dict.folderSectionTitle;
+    document.getElementById('input-syncdir').placeholder = dict.syncDirPlaceholder;
     document.getElementById('btn-pick-folder').textContent = dict.pickFolderBtn;
     document.getElementById('btn-test-folder').textContent = dict.testFolderBtn;
     document.getElementById('ui-webdav-section-title').textContent = dict.webdavSectionTitle;
     document.getElementById('btn-test-webdav').textContent = dict.testWebdavBtn;
     document.getElementById('ui-presets-label').textContent = dict.presetsLabel;
+    document.getElementById('preset-jianguoyun').textContent = dict.presetJianguoyun;
     document.getElementById('ui-label-davurl').textContent = dict.labelDavUrl;
     document.getElementById('ui-label-davpath').textContent = dict.labelDavPath;
     document.getElementById('ui-label-davuser').textContent = dict.labelDavUser;
@@ -751,7 +883,7 @@
     totalsCard.appendChild(
       el('div', { className: 'card-head' }, [
         el('h2', { className: 'card-title', text: dict.totalsTitle }),
-        el('span', { className: 'tag accent', text: `${merged.deviceCount} ${dict.devicesLabel.split('/')[0].trim()}` }),
+        el('span', { className: 'tag accent', text: dict.deviceCountTag(merged.deviceCount) }),
       ])
     );
 
@@ -1031,7 +1163,7 @@
       scheduleFullRefreshTimer();
     }
     syncHostTheme(data?.hostTheme);
-    if (data?.settings?.language && (data.settings.language === 'zh-CN' || data.settings.language === 'en')) {
+    if ((!state.settingsDirty || opts?.forceSettingsReset) && data?.settings?.language && I18N[data.settings.language]) {
       state.lang = data.settings.language;
     }
     applyStaticLabels();
@@ -1122,6 +1254,21 @@
       state.settingsDirty = true;
     });
 
+    document.getElementById('input-lang').addEventListener('change', (e) => {
+      const nextLang = e.target.value;
+      if (I18N[nextLang]) {
+        state.lang = nextLang;
+        applyStaticLabels();
+        if (state.dashboard) {
+          renderTopStatus(state.dashboard);
+          renderOverview(state.dashboard);
+          renderDevices(state.dashboard);
+          renderModels(state.dashboard);
+          renderSettings(state.dashboard, false);
+        }
+      }
+    });
+
     document.querySelectorAll('#sync-mode-group .mode-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         state.settingsDirty = true;
@@ -1157,7 +1304,10 @@
         const res = await requestJson('/api/settings/pick-folder', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ initialDir: document.getElementById('input-syncdir').value.trim() }),
+          body: JSON.stringify({
+            initialDir: document.getElementById('input-syncdir').value.trim(),
+            language: state.lang,
+          }),
         });
         if (!res?.cancelled && res?.path) {
           document.getElementById('input-syncdir').value = res.path;
@@ -1306,7 +1456,7 @@
     root.textContent = '';
     root.appendChild(
       el('article', { className: 'card' }, [
-        el('p', { className: 'muted', text: err?.message || 'Failed to load dashboard' }),
+        el('p', { className: 'muted', text: err?.message || t().loadFailed }),
       ])
     );
   });
