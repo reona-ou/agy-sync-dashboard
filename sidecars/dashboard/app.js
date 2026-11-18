@@ -714,7 +714,6 @@
   function renderSettings(data, forceReset) {
     const dict = t();
     const settings = data.settings || {};
-    const candidates = data.candidates || [];
 
     document.getElementById('settings-device-id').textContent = data.device?.deviceId || '--';
 
@@ -752,23 +751,6 @@
       devNameInput.value = settings.deviceName || '';
       intervalSelect.value = String(settings.syncIntervalMs || 30000);
       langSelect.value = settings.language || state.lang;
-    }
-
-    const candRow = document.getElementById('sync-candidates');
-    candRow.textContent = '';
-    if (candidates.length) {
-      candRow.hidden = false;
-      candRow.appendChild(el('span', { className: 'field-label', text: dict.detectedPrefix }));
-      for (const c of candidates) {
-        const chip = el('button', { type: 'button', className: 'chip-btn mono', text: c });
-        chip.addEventListener('click', () => {
-          syncDirInput.value = c;
-          state.settingsDirty = true;
-        });
-        candRow.appendChild(chip);
-      }
-    } else {
-      candRow.hidden = true;
     }
 
     const diag = document.getElementById('settings-diag');

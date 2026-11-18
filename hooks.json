@@ -1,14 +1,10 @@
 {
-  "hooks": {
+  "sync-on-stop": {
     "Stop": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node hooks/on-stop.mjs",
-            "timeout": 10
-          }
-        ]
+        "type": "command",
+        "command": "node hooks/on-stop.mjs",
+        "timeout": 10
       }
     ]
   }

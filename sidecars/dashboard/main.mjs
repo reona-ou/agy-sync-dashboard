@@ -91,29 +91,36 @@ function buildThemeCss(theme) {
   const palette = mode === 'light' ? theme.light : theme.dark;
   const accent = palette?.primary || '#7c5cff';
   const bg = palette?.background || (mode === 'light' ? '#f7f8fb' : '#121318');
-  const fg = palette?.foreground || (mode === 'light' ? '#171923' : '#e8eaf2');
+  const fg = palette?.foreground || (mode === 'light' ? '#171923' : '#f0f2f8');
   const surface = mode === 'light' ? '#ffffff' : '#191b23';
   const surface2 = mode === 'light' ? '#eff2f7' : '#212430';
-  const border = mode === 'light' ? 'rgba(20, 25, 38, 0.10)' : 'rgba(255, 255, 255, 0.09)';
-  const muted = mode === 'light' ? '#5c6475' : '#9aa2b6';
+  const border = mode === 'light' ? 'rgba(20, 25, 38, 0.12)' : 'rgba(255, 255, 255, 0.11)';
+  const muted = mode === 'light' ? '#5c6475' : '#a4acc0';
   const font = theme?.fontFamily ? `"${theme.fontFamily}", ` : '';
   const mono = theme?.monoFontFamily ? `"${theme.monoFontFamily}", ` : '';
 
   return `:root {
   color-scheme: ${mode};
-  --bg: ${bg};
-  --surface: ${surface};
-  --surface-2: ${surface2};
-  --fg: ${fg};
-  --muted: ${muted};
-  --border: ${border};
-  --accent: ${accent};
-  --accent-soft: color-mix(in srgb, ${accent} 16%, transparent);
+  --theme-bg: ${bg};
+  --theme-surface: ${surface};
+  --theme-surface-2: ${surface2};
+  --theme-fg: ${fg};
+  --theme-muted: ${muted};
+  --theme-border: ${border};
+  --theme-accent: ${accent};
+  --bg: var(--background, var(--theme-bg));
+  --surface: var(--card, var(--theme-surface));
+  --surface-2: var(--secondary, var(--theme-surface-2));
+  --fg: var(--foreground, var(--theme-fg));
+  --muted: var(--muted-foreground, var(--theme-muted));
+  --border: var(--card-border, var(--theme-border));
+  --accent: var(--primary, var(--theme-accent));
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
   --ok: #22c55e;
   --warn: #f59e0b;
   --danger: #ef4444;
-  --font-sans: ${font}system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: ${mono}ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --font-sans: var(--font-family, ${font}system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+  --font-mono: var(--editor-font-family, ${mono}ui-monospace, "Cascadia Mono", Consolas, monospace);
 }
 `;
 }
@@ -392,11 +399,44 @@ async function startRuntime() {
     const { SidecarApp, Response } = await loadSidecarSdk();
     const app = new SidecarApp();
 
-    app.api('/', () => new Response(readStatic('index.html'), { contentType: 'text/html', headers: { 'Cache-Control': 'no-store' } }), 'GET');
-    app.api('/settings', () => new Response(readStatic('index.html'), { contentType: 'text/html', headers: { 'Cache-Control': 'no-store' } }), 'GET');
-    app.api('/styles.css', () => new Response(readStatic('styles.css'), { contentType: 'text/css', headers: { 'Cache-Control': 'no-store' } }), 'GET');
-    app.api('/theme.css', async () => new Response(await service.getThemeCss(), { contentType: 'text/css', headers: { 'Cache-Control': 'no-store' } }), 'GET');
-    app.page('/app.js', () => new Response(readStatic('app.js'), { contentType: 'application/javascript', headers: { 'Cache-Control': 'no-store' } }));
+    const serveHtml = () => {
+      console.log('[agy-sync] serving index.html');
+      return new Response(readStatic('index.html'), {
+        contentType: 'text/html; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    };
+    app.page('/', serveHtml);
+    app.page('/index.html', serveHtml);
+    app.page('/settings', serveHtml);
+
+    app.api(
+      '/styles.css',
+      () =>
+        new Response(readStatic('styles.css'), {
+          contentType: 'text/css; charset=utf-8',
+          headers: { 'Cache-Control': 'no-store' },
+        }),
+      'GET'
+    );
+    app.api(
+      '/theme.css',
+      async () =>
+        new Response(await service.getThemeCss(), {
+          contentType: 'text/css; charset=utf-8',
+          headers: { 'Cache-Control': 'no-store' },
+        }),
+      'GET'
+    );
+    app.api(
+      '/app.js',
+      () =>
+        new Response(readStatic('app.js'), {
+          contentType: 'application/javascript; charset=utf-8',
+          headers: { 'Cache-Control': 'no-store' },
+        }),
+      'GET'
+    );
 
     app.api(
       '/api/dashboard',
@@ -449,7 +489,7 @@ async function startRuntime() {
       'POST'
     );
 
-    app.run();
+    await app.run();
 
     // Ephemeral local loopback control server so hooks can notify the live sidecar immediately.
     controlServer = http.createServer((req, res) => {

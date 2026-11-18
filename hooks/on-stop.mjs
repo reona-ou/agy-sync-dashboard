@@ -71,7 +71,13 @@ async function main() {
   await manager.syncOnce();
 }
 
-main().catch(() => {
-  // Hooks must never fail or block the host turn lifecycle.
-  process.exit(0);
-});
+main()
+  .catch(() => {
+    // Hooks must never fail or block the host turn lifecycle.
+  })
+  .finally(() => {
+    try {
+      process.stdout.write('{}');
+    } catch {}
+    process.exit(0);
+  });

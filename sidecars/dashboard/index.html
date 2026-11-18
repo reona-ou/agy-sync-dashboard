@@ -4,10 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Antigravity Sync Dashboard</title>
-  <link rel="stylesheet" href="/theme.css">
-  <link rel="stylesheet" href="/styles.css">
-  <script src="/preload.js"></script>
-  <script defer src="/app.js"></script>
+  <script src="preload.js"></script>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="shell">
@@ -76,7 +75,6 @@
                 <input class="input mono" id="input-syncdir" name="syncDir" type="text" placeholder="例如 D:\Sync\agy-sync-dashboard" autocomplete="off">
                 <button type="button" class="icon-btn" id="btn-pick-folder">选择目录…</button>
               </div>
-              <div id="sync-candidates" class="candidates-row" hidden></div>
             </div>
 
             <div id="section-webdav" class="subcard" hidden>
@@ -155,5 +153,6 @@
       </section>
     </main>
   </div>
+  <script src="app.js"></script>
 </body>
 </html>
