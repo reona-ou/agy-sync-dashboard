@@ -854,6 +854,26 @@ body {
   white-space: nowrap;
 }
 
+.input-with-unit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.input-with-unit .input {
+  flex: 1 1 0%;
+  width: 0;
+  min-width: 0;
+}
+
+.input-unit {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--agy-muted);
+  font-family: var(--agy-font-mono);
+}
+
 .field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

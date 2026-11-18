@@ -501,7 +501,7 @@ async function startRuntime() {
 
   const configureBackgroundJobs = async (overrideSettings = null) => {
     const settings = overrideSettings || (await service.getSettings()).settings;
-    const intervalMs = Math.max(10_000, Number(settings?.syncIntervalMs || 30_000));
+    const intervalMs = Math.max(3_000, Number(settings?.syncIntervalMs || 30_000));
     if (bgTimer) clearInterval(bgTimer);
     bgTimer = setInterval(() => {
       void service.runSync().catch(() => {});

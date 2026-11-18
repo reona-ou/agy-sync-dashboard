@@ -292,8 +292,8 @@ export class SyncManager {
     if (patch.language === 'zh-CN' || patch.language === 'en') {
       nextConfig.language = patch.language;
     }
-    if (typeof patch.syncIntervalMs === 'number' && patch.syncIntervalMs >= 5000) {
-      nextConfig.syncIntervalMs = Math.floor(patch.syncIntervalMs);
+    if (typeof patch.syncIntervalMs === 'number' && Number.isFinite(patch.syncIntervalMs)) {
+      nextConfig.syncIntervalMs = Math.min(86_400_000, Math.max(3000, Math.floor(patch.syncIntervalMs)));
     }
 
     return nextConfig;

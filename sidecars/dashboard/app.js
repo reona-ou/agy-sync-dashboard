@@ -79,7 +79,7 @@
       prefsSectionTitle: '设备与偏好设置',
       labelSyncDir: '同步文件夹路径 (Syncthing / 网盘)',
       labelDeviceName: '本机显示名称',
-      labelInterval: '自动同步间隔',
+      labelInterval: '自动刷新周期 (秒)',
       labelLang: '界面语言',
       saveBtn: '保存并立即同步',
       savingBtn: '保存中…',
@@ -179,7 +179,7 @@
       prefsSectionTitle: 'Device & Preferences',
       labelSyncDir: 'Sync Folder Path (Syncthing / Cloud Drive)',
       labelDeviceName: 'This Device Display Name',
-      labelInterval: 'Auto-Sync Interval',
+      labelInterval: 'Refresh Interval (s)',
       labelLang: 'Language',
       saveBtn: 'Save & Sync Now',
       savingBtn: 'Saving…',
@@ -959,7 +959,7 @@
     const davPassHint = document.getElementById('dav-pass-hint');
     const clearPassBtn = document.getElementById('btn-clear-davpass');
     const devNameInput = document.getElementById('input-devicename');
-    const intervalSelect = document.getElementById('input-interval');
+    const intervalInput = document.getElementById('input-interval');
     const langSelect = document.getElementById('input-lang');
 
     const hasSavedPass = Boolean(settings.webdav?.hasPassword) && !state.clearPassword;
@@ -987,7 +987,7 @@
       davUserInput.value = settings.webdav?.username || '';
       davPassInput.value = '';
       devNameInput.value = settings.deviceName || '';
-      intervalSelect.value = String(settings.syncIntervalMs || 30000);
+      intervalInput.value = String(Math.max(3, Math.round(Number(settings.syncIntervalMs || 30000) / 1000)));
       langSelect.value = settings.language || state.lang;
     }
 
@@ -1012,7 +1012,7 @@
     if (state.fullRefreshTimer) {
       clearInterval(state.fullRefreshTimer);
     }
-    const intervalMs = Math.max(10000, Number(state.refreshIntervalMs || 30000));
+    const intervalMs = Math.max(3000, Number(state.refreshIntervalMs || 30000));
     state.fullRefreshTimer = setInterval(() => {
       if (document.hidden) return;
       void loadDashboard({ force: true }).catch(() => {});
@@ -1025,7 +1025,7 @@
     if (typeof data?.revision === 'number') {
       state.lastRevision = data.revision;
     }
-    const nextInterval = Math.max(10000, Number(data?.settings?.syncIntervalMs || 30000));
+    const nextInterval = Math.max(3000, Number(data?.settings?.syncIntervalMs || 30000));
     if (nextInterval !== state.refreshIntervalMs || !state.fullRefreshTimer) {
       state.refreshIntervalMs = nextInterval;
       scheduleFullRefreshTimer();
@@ -1096,7 +1096,8 @@
         ...(state.clearPassword && !passVal ? { clearPassword: true } : {}),
       },
       deviceName: document.getElementById('input-devicename').value.trim(),
-      syncIntervalMs: Number(document.getElementById('input-interval').value || 30000),
+      syncIntervalMs:
+        Math.min(86400, Math.max(3, Math.round(Number(document.getElementById('input-interval').value) || 30))) * 1000,
       language: document.getElementById('input-lang').value,
     };
   }

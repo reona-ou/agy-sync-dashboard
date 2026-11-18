@@ -468,10 +468,12 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
           syncMode: 'webdav',
           webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'demo' },
           deviceName: 'WinBox-Renamed',
+          syncIntervalMs: 5000,
         }),
       })
     ).json();
     assert.equal(savedAgain.settings.webdav.hasPassword, true);
+    assert.equal(savedAgain.settings.syncIntervalMs, 5000);
     assert.equal(savedAgain.dashboard.merged.totals.totalTokens, 3000);
 
     // Standalone /settings configuration page route works

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Antigravity Sync Dashboard</title>
   <script src="preload.js"></script>
-  <link rel="stylesheet" href="theme.css?v=20261118d">
-  <link rel="stylesheet" href="styles.css?v=20261118d">
+  <link rel="stylesheet" href="theme.css?v=20261118e">
+  <link rel="stylesheet" href="styles.css?v=20261118e">
 </head>
 <body>
   <div class="shell">
@@ -124,13 +124,11 @@
               </label>
               <div class="field-grid">
                 <label class="field">
-                  <span class="field-label" id="ui-label-interval">自动同步间隔</span>
-                  <select class="input" id="input-interval" name="syncIntervalMs">
-                    <option value="15000">15 秒</option>
-                    <option value="30000">30 秒</option>
-                    <option value="60000">60 秒</option>
-                    <option value="300000">5 分钟</option>
-                  </select>
+                  <span class="field-label" id="ui-label-interval">自动刷新周期 (秒)</span>
+                  <div class="input-with-unit">
+                    <input class="input mono" id="input-interval" name="syncIntervalSec" type="number" min="3" max="86400" step="1" placeholder="30" autocomplete="off">
+                    <span class="input-unit">s</span>
+                  </div>
                 </label>
                 <label class="field">
                   <span class="field-label" id="ui-label-lang">界面语言</span>
@@ -153,6 +151,6 @@
       </section>
     </main>
   </div>
-  <script src="app.js?v=20261118d"></script>
+  <script src="app.js?v=20261118e"></script>
 </body>
 </html>
