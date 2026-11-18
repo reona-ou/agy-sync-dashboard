@@ -50,6 +50,8 @@
       deviceCountTag: (n) => `${n} 台设备`,
       latestGenTitle: '本机最近一次生成',
       trendTitle: '近 14 天多设备趋势',
+      trendPeak: '峰值',
+      vsPrevDay: '较昨日',
       recentTitle: '最近对话 (跨设备)',
       devicesTitle: '参与合并的设备',
       modelsTitle: '模型用量汇总 (跨设备)',
@@ -157,6 +159,8 @@
       deviceCountTag: (n) => `${n} devices`,
       latestGenTitle: 'Latest Local Generation',
       trendTitle: '14-Day Multi-Device Trend',
+      trendPeak: 'Peak',
+      vsPrevDay: 'vs yesterday',
       recentTitle: 'Recent Conversations (All Devices)',
       devicesTitle: 'Synced Devices Breakdown',
       modelsTitle: 'Usage by Model (Merged)',
@@ -264,6 +268,8 @@
       deviceCountTag: (n) => `${n} 台`,
       latestGenTitle: 'ローカル最新生成',
       trendTitle: '直近14日間のマルチデバイス推移',
+      trendPeak: 'ピーク',
+      vsPrevDay: '前日比',
       recentTitle: '最近の会話 (全デバイス)',
       devicesTitle: '統合済みデバイス一覧',
       modelsTitle: 'モデル別使用量 (統合)',
@@ -436,7 +442,11 @@
         Math.min(primaryParsed.r, primaryParsed.g, primaryParsed.b);
       if (chroma >= 24 && contrastRatio(bgRef, primaryParsed) >= 2.2) {
         resolvedAccent = primaryParsed.css;
-        onAccent = luminance(primaryParsed) > 0.42 ? '#111318' : '#ffffff';
+        // Pick whichever label colour clears the accent by more: a mid-tone
+        // accent can fail white text without being light enough for dark ink.
+        const onWhite = contrastRatio(primaryParsed, { r: 255, g: 255, b: 255 });
+        const onInk = contrastRatio(primaryParsed, { r: 17, g: 19, b: 24 });
+        onAccent = onInk > onWhite ? '#111318' : '#ffffff';
       }
     }
 
@@ -704,7 +714,7 @@
     card.appendChild(head);
 
     if (!quota?.connected || !quota.groups?.length) {
-      card.appendChild(el('p', { className: 'muted', text: dict.quotaOffline }));
+      card.appendChild(el('p', { className: 'empty-note', text: dict.quotaOffline }));
       return card;
     }
 
@@ -810,9 +820,13 @@
     }
 
     const maxVal = Math.max(
-      1,
+      0,
       ...dates.map((dk) => Number(byDate?.[dk]?.totalTokens || 0))
     );
+    // Square-root scale: on a linear axis one heavy day flattens every other
+    // bar to the 2px floor, which reads as "no usage" when it is not.
+    const barHeightPct = (val) =>
+      val > 0 && maxVal > 0 ? Math.max(8, Math.round(Math.sqrt(val / maxVal) * 100)) : 2;
 
     if (!state.selectedDateKey || !dates.includes(state.selectedDateKey)) {
       state.selectedDateKey = todayKey;
@@ -822,7 +836,10 @@
     card.appendChild(
       el('div', { className: 'card-head' }, [
         el('h2', { className: 'card-title', text: dict.trendTitle }),
-        el('span', { className: 'tag', text: '14d' }),
+        el('span', {
+          className: maxVal > 0 ? 'tag accent' : 'tag',
+          text: maxVal > 0 ? `${dict.trendPeak} ${fmtTokens(maxVal)}` : '14d',
+        }),
       ])
     );
 
@@ -838,20 +855,25 @@
         detail.textContent = `${dk}: ${fmtTokens(b.totalTokens)} (${dict.inTok} ${fmtTokens(b.inputTokens)} / ${dict.cacheTok} ${fmtTokens(b.cacheReadTokens)} / ${dict.outTok} ${fmtTokens(b.outputTokens)} · ${b.generations} ${dict.gens})`;
       }
       Array.from(bars.children).forEach((col, idx) => {
-        col.classList.toggle('active', dates[idx] === dk);
+        const active = dates[idx] === dk;
+        col.classList.toggle('active', active);
+        col.setAttribute('aria-pressed', String(active));
       });
     };
 
     dates.forEach((dk) => {
       const val = Number(byDate?.[dk]?.totalTokens || 0);
-      const pct = val > 0 ? Math.max(4, Math.round((val / maxVal) * 100)) : 3;
+      const label = `${dk}: ${fmtTokens(val)}`;
       const col = el(
-        'div',
+        'button',
         {
+          type: 'button',
           className: `chart-col${dk === state.selectedDateKey ? ' active' : ''}`,
-          title: `${dk}: ${fmtTokens(val)}`,
+          'aria-label': label,
+          'aria-pressed': String(dk === state.selectedDateKey),
+          title: label,
         },
-        [el('div', { className: 'chart-bar', style: { height: `${pct}%` } })]
+        [el('div', { className: 'chart-bar', style: { height: `${barHeightPct(val)}%` } })]
       );
       col.addEventListener('click', () => updateDetail(dk));
       bars.appendChild(col);
@@ -876,6 +898,20 @@
     const totals = merged.totals;
     const today = merged.today;
 
+    // Leading metric gets a day-over-day delta; no extra node, same sub line.
+    const todaySubText = () => {
+      const base = `${dict.inTok} ${fmtTokens(today.inputTokens)} · ${dict.outTok} ${fmtTokens(today.outputTokens)}`;
+      const yest = new Date(`${merged.todayKey}T00:00:00`);
+      yest.setDate(yest.getDate() - 1);
+      const yestKey = `${yest.getFullYear()}-${String(yest.getMonth() + 1).padStart(2, '0')}-${String(
+        yest.getDate()
+      ).padStart(2, '0')}`;
+      const prevTotal = Number(merged.byDate?.[yestKey]?.totalTokens || 0);
+      if (!(prevTotal > 0 && today.totalTokens > 0)) return base;
+      const ratio = today.totalTokens / prevTotal - 1;
+      return `${base} · ${ratio >= 0 ? '▲' : '▼'} ${fmtPct(Math.abs(ratio))} ${dict.vsPrevDay}`;
+    };
+
     root.appendChild(buildQuotaCard(data.quota));
 
     // Totals KPI card
@@ -893,7 +929,7 @@
         el('div', { className: 'kpi-value', text: fmtTokens(today.totalTokens) }),
         el('div', {
           className: 'kpi-sub',
-          text: `${dict.inTok} ${fmtTokens(today.inputTokens)} · ${dict.outTok} ${fmtTokens(today.outputTokens)}`,
+          text: todaySubText(),
         }),
       ]),
       el('div', { className: 'kpi-box' }, [
@@ -996,7 +1032,7 @@
 
     const devices = data.merged.devices || [];
     if (!devices.length) {
-      card.appendChild(el('p', { className: 'muted', text: dict.noData }));
+      card.appendChild(el('p', { className: 'empty-note', text: dict.noData }));
       root.appendChild(card);
       return;
     }
@@ -1046,7 +1082,7 @@
 
     const models = data.merged.models || [];
     if (!models.length) {
-      card.appendChild(el('p', { className: 'muted', text: dict.noData }));
+      card.appendChild(el('p', { className: 'empty-note', text: dict.noData }));
       root.appendChild(card);
       return;
     }
@@ -1200,6 +1236,7 @@
     const btn = document.getElementById('btn-sync');
     state.syncing = true;
     btn.disabled = true;
+    document.documentElement.classList.add('agy-syncing');
     applyStaticLabels();
     try {
       const data = await requestJson('/api/sync', {
@@ -1211,6 +1248,7 @@
     } finally {
       state.syncing = false;
       btn.disabled = false;
+      document.documentElement.classList.remove('agy-syncing');
       applyStaticLabels();
     }
   }
@@ -1456,7 +1494,7 @@
     root.textContent = '';
     root.appendChild(
       el('article', { className: 'card' }, [
-        el('p', { className: 'muted', text: err?.message || t().loadFailed }),
+        el('p', { className: 'empty-note', text: err?.message || t().loadFailed }),
       ])
     );
   });
