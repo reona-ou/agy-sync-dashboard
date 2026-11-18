@@ -291,7 +291,7 @@ test('parsePropfindXml extracts json entries and ignores directories, hidden fil
 
 test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConnection, and password redaction', async () => {
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-dav-'));
-  const expectedAuth = 'Basic ' + Buffer.from('reona:secret-pass', 'utf8').toString('base64');
+  const expectedAuth = 'Basic ' + Buffer.from('demo:secret-pass', 'utf8').toString('base64');
   const collections = new Set(['/dav', '/dav/']);
   const files = new Map();
 
@@ -433,7 +433,7 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           syncMode: 'webdav',
-          webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'reona', password: 'wrong' },
+          webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'demo', password: 'wrong' },
         }),
       })
     ).json();
@@ -447,7 +447,7 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           syncMode: 'webdav',
-          webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'reona', password: 'secret-pass' },
+          webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'demo', password: 'secret-pass' },
           deviceName: 'WinBox',
         }),
       })
@@ -466,7 +466,7 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           syncMode: 'webdav',
-          webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'reona' },
+          webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'demo' },
           deviceName: 'WinBox-Renamed',
         }),
       })
@@ -488,6 +488,23 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
     await fetch(`${base}/api/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const ver2 = await (await fetch(`${base}/api/version`)).json();
     assert.ok(ver2.revision >= ver1.revision);
+    // Verify fresh SyncManager keeps all sync configs blank (local-only) by default
+    const freshDataDir = path.join(tmpRoot, 'fresh-data');
+    const freshMgr = new SyncManager({
+      dataDir: freshDataDir,
+      paths: {
+        conversationsDir: path.join(tmpRoot, 'empty-convs'),
+        summariesDb: path.join(tmpRoot, 'missing.db'),
+        pluginDataDir: freshDataDir,
+        pluginConfig: path.join(tmpRoot, 'missing-cfg.json'),
+      },
+    });
+    const freshInit = await freshMgr.ensureIdentityAndConfig();
+    assert.equal(freshInit.config.syncMode, 'local-only');
+    assert.equal(freshInit.config.syncDir, '');
+    assert.equal(freshInit.config.webdav.url, '');
+    assert.equal(freshInit.config.webdav.username, '');
+    assert.equal(freshInit.config.webdav.password, '');
   } finally {
     if (dashServer) await new Promise((r) => dashServer.close(r));
     await new Promise((r) => davServer.close(r));

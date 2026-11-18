@@ -34,7 +34,7 @@ export async function pickNativeFolder(initialDir = '') {
       '$f = New-Object System.Windows.Forms.Form;',
       '$f.TopMost = $true;',
       '$d = New-Object System.Windows.Forms.FolderBrowserDialog;',
-      '$d.Description = "选择跨设备同步文件夹 (如 D:\\Sync\\agy-sync-dashboard)";',
+      '$d.Description = "选择跨设备同步文件夹";',
       '$d.ShowNewFolderButton = $true;',
       'if ($env:AGY_INIT_DIR -and (Test-Path $env:AGY_INIT_DIR)) { $d.SelectedPath = $env:AGY_INIT_DIR };',
       'if ($d.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }',

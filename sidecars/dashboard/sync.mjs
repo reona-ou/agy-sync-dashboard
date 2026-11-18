@@ -317,12 +317,12 @@ export class SyncManager {
       await fsp.writeFile(this.deviceFile, JSON.stringify(device, null, 2) + '\n', 'utf8');
     }
 
-    const candidates = detectSyncCandidates(this.paths);
+    const candidates = [];
     let config = readJsonSafe(this.configFile, null);
     let dirty = false;
 
     if (!config) {
-      const defaultDir = process.env.AGY_SYNC_DIR || candidates[0] || '';
+      const defaultDir = process.env.AGY_SYNC_DIR || '';
       config = {
         syncMode: defaultDir ? 'folder' : 'local-only',
         syncDir: defaultDir,
@@ -334,8 +334,8 @@ export class SyncManager {
       };
       dirty = true;
     } else {
-      if (!config.syncDir && (process.env.AGY_SYNC_DIR || candidates[0])) {
-        config.syncDir = process.env.AGY_SYNC_DIR || candidates[0] || '';
+      if (!config.syncDir && process.env.AGY_SYNC_DIR) {
+        config.syncDir = process.env.AGY_SYNC_DIR;
         dirty = true;
       }
       if (!VALID_SYNC_MODES.includes(config.syncMode)) {

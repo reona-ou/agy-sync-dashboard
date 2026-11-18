@@ -66,14 +66,17 @@ cd agy-sync-dashboard
 # 如果有 Conda 环境：
 conda activate Agent
 
-# 一键安装并立即执行首次本地同步（建议显式指定 SyncDir 和本机名称）
-.\install.ps1 -SyncDir "D:\Sync\agy-sync-dashboard" -DeviceName "Workstation-Win"
+# 一键安装（默认全部同步配置留空，以“仅本机”模式启动，可在插件设置页配置）
+.\install.ps1
+
+# 或安装时直接指定同步目录与本机名称
+.\install.ps1 -SyncDir "<你的同步目录>\agy-sync-dashboard" -DeviceName "Workstation-Win"
 ```
 
 或者直接调用 Python 脚本：
 
 ```powershell
-python manage.py install --sync-dir "D:\Sync\agy-sync-dashboard" --device-name "Workstation-Win"
+python manage.py install
 python manage.py sync
 python manage.py status
 ```
@@ -82,10 +85,10 @@ python manage.py status
 
 ```bash
 chmod +x install.sh
-./install.sh --sync-dir "$HOME/Sync/agy-sync-dashboard" --device-name "MacBook-Pro"
+./install.sh
 ```
 
-或者直接调用 Python 脚本：
+或者直接调用 Python 脚本（也支持直接传入 `--sync-dir`）：
 
 ```bash
 python3 manage.py install --sync-dir "$HOME/Sync/agy-sync-dashboard" --device-name "Linux-Desktop"
@@ -93,7 +96,7 @@ python3 manage.py sync
 python3 manage.py status
 ```
 
-> **提示**：如果不传 `--sync-dir`，安装脚本会自动检测常见同步根目录（`D:\Sync`、`~/Sync`、`~/Syncthing`、`OneDrive` 等）；如果未检测到，也可以安装后随时在右侧面板 **设置** 标签页中修改并保存。
+> **提示**：仓库默认不预置任何个人路径、设备名或 WebDAV 凭据；首次安装后所有同步配置均保持为空（以 **仅本机** 模式启动），可在右侧面板 **设置** 标签页中自行选择同步目录或配置 WebDAV。
 
 ---
 

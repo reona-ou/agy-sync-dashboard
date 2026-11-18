@@ -196,14 +196,13 @@ def ensure_local_settings(
         device["deviceName"] = device_name.strip()
         write_json_atomic(device_file, device)
 
-    candidates = detect_sync_candidates(paths["home"])
     cfg = read_json(config_file, {})
     changed = False
     if sync_dir is not None:
         cfg["syncDir"] = str(Path(sync_dir).expanduser()) if sync_dir.strip() else ""
         changed = True
-    elif not cfg.get("syncDir") and candidates:
-        cfg["syncDir"] = candidates[0]
+    elif "syncDir" not in cfg:
+        cfg["syncDir"] = ""
         changed = True
 
     dav = cfg.get("webdav")
