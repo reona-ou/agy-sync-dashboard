@@ -187,6 +187,12 @@
     clearPassword: false,
     hostThemeHint: null,
     lastThemeSig: '',
+    lastRevision: null,
+    versionEndpointSupported: true,
+    refreshIntervalMs: 30000,
+    lastDashboardFetchAt: 0,
+    inFlightLoad: null,
+    fullRefreshTimer: null,
   };
 
   const probeCtx = (() => {
@@ -871,7 +877,11 @@
       davPassHint.hidden = true;
     }
 
-    if (!state.settingsDirty || forceReset) {
+    const activeInSettingsForm =
+      document.activeElement &&
+      document.getElementById('settings-form')?.contains(document.activeElement);
+
+    if ((!state.settingsDirty && !activeInSettingsForm) || forceReset) {
       applySyncModeUi(settings.syncMode || (settings.syncDir ? 'folder' : 'local-only'));
       syncDirInput.value = settings.syncDir || '';
       davUrlInput.value = settings.webdav?.url || '';
@@ -900,8 +910,28 @@
     diag.appendChild(el('div', { text: `${dict.diagLastSync}: ${fmtRelative(data.syncStatus?.lastSyncAt)}` }));
   }
 
+  function scheduleFullRefreshTimer() {
+    if (state.fullRefreshTimer) {
+      clearInterval(state.fullRefreshTimer);
+    }
+    const intervalMs = Math.max(10000, Number(state.refreshIntervalMs || 30000));
+    state.fullRefreshTimer = setInterval(() => {
+      if (document.hidden) return;
+      void loadDashboard({ force: true }).catch(() => {});
+    }, intervalMs);
+  }
+
   function renderAll(data, opts) {
     state.dashboard = data;
+    state.lastDashboardFetchAt = Date.now();
+    if (typeof data?.revision === 'number') {
+      state.lastRevision = data.revision;
+    }
+    const nextInterval = Math.max(10000, Number(data?.settings?.syncIntervalMs || 30000));
+    if (nextInterval !== state.refreshIntervalMs || !state.fullRefreshTimer) {
+      state.refreshIntervalMs = nextInterval;
+      scheduleFullRefreshTimer();
+    }
     syncHostTheme(data?.hostTheme);
     if (data?.settings?.language && (data.settings.language === 'zh-CN' || data.settings.language === 'en')) {
       state.lang = data.settings.language;
@@ -915,11 +945,24 @@
   }
 
   async function loadDashboard(opts) {
+    if (state.inFlightLoad && !opts?.force) {
+      return state.inFlightLoad;
+    }
     const q = new URLSearchParams();
     if (opts?.force) q.set('force', '1');
     const suffix = q.toString() ? `?${q.toString()}` : '';
-    const data = await requestJson(`/api/dashboard${suffix}`, { method: 'GET' });
-    renderAll(data);
+    const pending = requestJson(`/api/dashboard${suffix}`, { method: 'GET' })
+      .then((data) => {
+        renderAll(data);
+        return data;
+      })
+      .finally(() => {
+        if (state.inFlightLoad === pending) {
+          state.inFlightLoad = null;
+        }
+      });
+    state.inFlightLoad = pending;
+    return pending;
   }
 
   async function triggerSync() {
@@ -1106,9 +1149,59 @@
     });
   }
 
+  function startAutoRefresh() {
+    scheduleFullRefreshTimer();
+
+    const checkForUpdates = async () => {
+      if (document.hidden || state.inFlightLoad || state.syncing) return;
+      if (!state.versionEndpointSupported) {
+        if (Date.now() - state.lastDashboardFetchAt >= 5000) {
+          await loadDashboard().catch(() => {});
+        }
+        return;
+      }
+      try {
+        const res = await apiFetch('/api/version', { method: 'GET' });
+        if (res.status === 404) {
+          state.versionEndpointSupported = false;
+          return;
+        }
+        if (!res.ok) return;
+        const ver = await res.json();
+        if (typeof ver?.revision === 'number' && ver.revision !== state.lastRevision) {
+          await loadDashboard().catch(() => {});
+        }
+      } catch {
+        // Ignore transient network errors during sidecar reload
+      }
+    };
+
+    setInterval(() => {
+      void checkForUpdates();
+    }, 3000);
+
+    setInterval(() => {
+      if (document.hidden || !state.dashboard || state.inFlightLoad) return;
+      renderAll(state.dashboard);
+    }, 15000);
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        void loadDashboard({ force: true }).catch(() => {});
+      }
+    });
+
+    window.addEventListener('focus', () => {
+      if (Date.now() - state.lastDashboardFetchAt > 2500) {
+        void loadDashboard().catch(() => {});
+      }
+    });
+  }
+
   watchHostTheme();
   setupTabs();
   setupActions();
+  startAutoRefresh();
   void loadDashboard().catch((err) => {
     const root = document.getElementById('overview-root');
     root.textContent = '';
@@ -1118,8 +1211,4 @@
       ])
     );
   });
-
-  setInterval(() => {
-    void loadDashboard().catch(() => {});
-  }, 30000);
 })();

@@ -154,7 +154,7 @@ export class QuotaClient {
   }
 
   async fetch(force = false) {
-    if (!force && this.lastResult && Date.now() - this.lastFetchedAt < 45_000) {
+    if (!force && this.lastResult && Date.now() - this.lastFetchedAt < 15_000) {
       return this.lastResult;
     }
 

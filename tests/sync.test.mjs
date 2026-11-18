@@ -471,6 +471,16 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
     const settingsPage = await fetch(`${base}/settings`);
     assert.equal(settingsPage.status, 200);
     assert.match(await settingsPage.text(), /id="panel-settings"/);
+
+    // Lightweight /api/version endpoint tracks revision and merged counters
+    const ver1 = await (await fetch(`${base}/api/version`)).json();
+    assert.equal(ver1.deviceCount, 2);
+    assert.equal(ver1.totalTokens, 3000);
+    assert.ok(ver1.revision >= 1);
+
+    await fetch(`${base}/api/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const ver2 = await (await fetch(`${base}/api/version`)).json();
+    assert.ok(ver2.revision >= ver1.revision);
   } finally {
     if (dashServer) await new Promise((r) => dashServer.close(r));
     await new Promise((r) => davServer.close(r));

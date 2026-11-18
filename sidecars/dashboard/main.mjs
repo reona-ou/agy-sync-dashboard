@@ -121,19 +121,43 @@ export async function createDashboardService(options = {}) {
 
   const syncManager = options.syncManager || new SyncManager({ paths });
   const quotaClient = options.quotaClient || new QuotaClient(paths);
+  const settingsListeners = new Set();
 
+  let revision = 0;
+  let lastDataFingerprint = '';
   let inFlightSync = null;
+
+  const updateFingerprint = (synced) => {
+    const fp = JSON.stringify([
+      synced?.merged?.totals?.totalTokens || 0,
+      synced?.merged?.totals?.generations || 0,
+      synced?.merged?.deviceCount || 0,
+      synced?.syncStatus?.lastSyncAt || 0,
+      synced?.syncStatus?.error || '',
+    ]);
+    if (fp !== lastDataFingerprint) {
+      lastDataFingerprint = fp;
+      revision += 1;
+    }
+  };
+
   const runSync = () => {
     if (!inFlightSync) {
-      inFlightSync = syncManager.syncOnce().finally(() => {
-        inFlightSync = null;
-      });
+      inFlightSync = syncManager
+        .syncOnce()
+        .then((res) => {
+          updateFingerprint(res);
+          return res;
+        })
+        .finally(() => {
+          inFlightSync = null;
+        });
     }
     return inFlightSync;
   };
 
   async function getDashboard({ forceSync = false, forceQuota = false } = {}) {
-    const stale = !syncManager.lastMerged || Date.now() - syncManager.lastSyncAt > 12_000;
+    const stale = !syncManager.lastMerged || Date.now() - syncManager.lastSyncAt > 4_000;
     const synced = forceSync || stale ? await runSync() : syncManager.lastMerged;
     const [quota, hostTheme] = await Promise.all([
       quotaClient.fetch(forceQuota).catch((err) => ({
@@ -146,14 +170,32 @@ export async function createDashboardService(options = {}) {
     ]);
 
     return {
+      revision,
       hostTheme,
       quota,
       ...synced,
     };
   }
 
+  function getVersion() {
+    const merged = syncManager.lastMerged;
+    return {
+      revision,
+      lastSyncAt: merged?.syncStatus?.lastSyncAt || syncManager.lastSyncAt || 0,
+      totalTokens: merged?.merged?.totals?.totalTokens || 0,
+      generations: merged?.merged?.totals?.generations || 0,
+      deviceCount: merged?.merged?.deviceCount || 0,
+    };
+  }
+
   async function updateSettings(payload) {
     const updated = await syncManager.updateSettings(payload || {});
+    updateFingerprint(updated.synced);
+    for (const cb of settingsListeners) {
+      try {
+        cb(updated.settings);
+      } catch {}
+    }
     const [quota, hostTheme] = await Promise.all([
       quotaClient.fetch(false).catch(() => ({ connected: false, groups: [], fetchedAt: Date.now() })),
       readHostTheme(paths.pluginConfig),
@@ -162,6 +204,7 @@ export async function createDashboardService(options = {}) {
       settings: updated.settings,
       candidates: updated.candidates,
       dashboard: {
+        revision,
         hostTheme,
         quota,
         ...updated.synced,
@@ -189,10 +232,15 @@ export async function createDashboardService(options = {}) {
     quotaClient,
     runSync,
     getDashboard,
+    getVersion,
     updateSettings,
     getSettings,
     testSettings,
     getThemeCss,
+    onSettingsUpdated(cb) {
+      settingsListeners.add(cb);
+      return () => settingsListeners.delete(cb);
+    },
   };
 }
 
@@ -225,6 +273,11 @@ export function createStandaloneHttpServer(service, options = {}) {
     };
 
     try {
+      if (url.pathname === '/api/version' && req.method === 'GET') {
+        sendJson(200, service.getVersion());
+        return;
+      }
+
       if (url.pathname === '/api/dashboard' && req.method === 'GET') {
         const force = url.searchParams.get('force') === '1' || url.searchParams.get('force') === 'true';
         const quotaRefresh = url.searchParams.get('quotaRefresh') === '1' || force;
@@ -358,20 +411,92 @@ async function startRuntime() {
 
   let bgTimer = null;
   let controlServer = null;
+  let convWatcher = null;
+  let syncWatcher = null;
+  let watchDebounce = null;
+  let watchedDevicesDir = '';
 
-  const startPeriodicSync = async () => {
-    const { settings } = await service.getSettings();
-    const intervalMs = Math.max(10_000, Number(settings.syncIntervalMs || 30_000));
+  const scheduleWatchSync = () => {
+    if (watchDebounce) clearTimeout(watchDebounce);
+    watchDebounce = setTimeout(() => {
+      watchDebounce = null;
+      void service.runSync().catch(() => {});
+    }, 1000);
+    if (typeof watchDebounce.unref === 'function') watchDebounce.unref();
+  };
+
+  const attachConversationsWatcher = () => {
+    try {
+      if (!convWatcher && fs.existsSync(paths.conversationsDir)) {
+        convWatcher = fs.watch(paths.conversationsDir, (_ev, filename) => {
+          const name = String(filename || '');
+          if (/\.(db|sqlite|db-wal|db-shm)$/i.test(name) || !name) {
+            scheduleWatchSync();
+          }
+        });
+        convWatcher.on('error', () => {});
+      }
+    } catch {}
+  };
+
+  const refreshSyncDirWatcher = async (settings) => {
+    const mode = settings?.syncMode || 'local-only';
+    const syncDir = String(settings?.syncDir || '').trim();
+    const targetDir = (mode === 'folder' || mode === 'both') && syncDir ? path.join(syncDir, 'devices') : '';
+    if (targetDir === watchedDevicesDir && syncWatcher) return;
+    if (syncWatcher) {
+      try {
+        syncWatcher.close();
+      } catch {}
+      syncWatcher = null;
+    }
+    watchedDevicesDir = targetDir;
+    if (!targetDir) return;
+    try {
+      if (fs.existsSync(targetDir)) {
+        const ownId = service.syncManager.lastMerged?.device?.deviceId || '';
+        syncWatcher = fs.watch(targetDir, (_ev, filename) => {
+          const name = String(filename || '');
+          if (!name) return scheduleWatchSync();
+          if (name.endsWith('.tmp') || name.startsWith('.')) return;
+          if (ownId && name === `${ownId}.json`) return;
+          if (name.endsWith('.json')) scheduleWatchSync();
+        });
+        syncWatcher.on('error', () => {});
+      }
+    } catch {}
+  };
+
+  const configureBackgroundJobs = async (overrideSettings = null) => {
+    const settings = overrideSettings || (await service.getSettings()).settings;
+    const intervalMs = Math.max(10_000, Number(settings?.syncIntervalMs || 30_000));
+    if (bgTimer) clearInterval(bgTimer);
     bgTimer = setInterval(() => {
       void service.runSync().catch(() => {});
     }, intervalMs);
     bgTimer.unref();
+    attachConversationsWatcher();
+    await refreshSyncDirWatcher(settings);
   };
 
-  await startPeriodicSync();
+  await configureBackgroundJobs();
+  service.onSettingsUpdated((nextSettings) => {
+    void configureBackgroundJobs(nextSettings).catch(() => {});
+  });
 
   const cleanup = async () => {
     if (bgTimer) clearInterval(bgTimer);
+    if (watchDebounce) clearTimeout(watchDebounce);
+    if (convWatcher) {
+      try {
+        convWatcher.close();
+      } catch {}
+    }
+    if (syncWatcher) {
+      try {
+        syncWatcher.close();
+      } catch {}
+    }
     if (controlServer) {
       await new Promise((resolve) => controlServer.close(() => resolve()));
     }
@@ -427,6 +552,8 @@ async function startRuntime() {
         }),
       'GET'
     );
+
+    app.api('/api/version', () => service.getVersion(), 'GET');
 
     app.api(
       '/api/dashboard',
