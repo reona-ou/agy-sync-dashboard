@@ -167,6 +167,10 @@ def set_plugin_enabled(config_json: Path, enabled: bool | None) -> None:
 def ensure_local_settings(
     paths: dict[str, Path],
     sync_dir: str | None = None,
+    sync_mode: str | None = None,
+    webdav_url: str | None = None,
+    webdav_path: str | None = None,
+    webdav_user: str | None = None,
     device_name: str | None = None,
     language: str | None = None,
 ) -> tuple[dict, dict]:
@@ -200,6 +204,36 @@ def ensure_local_settings(
         changed = True
     elif not cfg.get("syncDir") and candidates:
         cfg["syncDir"] = candidates[0]
+        changed = True
+
+    dav = cfg.get("webdav")
+    if not isinstance(dav, dict):
+        dav = {"url": "", "remotePath": "/agy-sync-dashboard", "username": "", "password": ""}
+        changed = True
+    if webdav_url is not None:
+        dav["url"] = webdav_url.strip().rstrip("/")
+        changed = True
+    if webdav_path is not None:
+        rp = "/" + webdav_path.strip().strip("/")
+        dav["remotePath"] = "/agy-sync-dashboard" if rp == "/" else rp
+        changed = True
+    if webdav_user is not None:
+        dav["username"] = webdav_user.strip()
+        changed = True
+    cfg["webdav"] = dav
+
+    if sync_mode in ("folder", "webdav", "both", "local-only"):
+        cfg["syncMode"] = sync_mode
+        changed = True
+    elif not cfg.get("syncMode"):
+        if dav.get("url") and cfg.get("syncDir"):
+            cfg["syncMode"] = "both"
+        elif dav.get("url"):
+            cfg["syncMode"] = "webdav"
+        elif cfg.get("syncDir"):
+            cfg["syncMode"] = "folder"
+        else:
+            cfg["syncMode"] = "local-only"
         changed = True
 
     if device_name:
@@ -236,6 +270,7 @@ def build_status(paths: dict[str, Path]) -> dict:
     local_cfg = read_json(paths["data_dir"] / "config.json", {})
     device = read_json(paths["data_dir"] / "device.json", {})
     sync_dir = local_cfg.get("syncDir", "")
+    dav = local_cfg.get("webdav") if isinstance(local_cfg.get("webdav"), dict) else {}
     peer_files: list[str] = []
     if sync_dir:
         devices_dir = Path(sync_dir) / "devices"
@@ -255,7 +290,14 @@ def build_status(paths: dict[str, Path]) -> dict:
         "pluginDir": str(plugin_dir),
         "hostConfig": str(paths["config_json"]),
         "dataDir": str(paths["data_dir"]),
+        "syncMode": local_cfg.get("syncMode", "folder" if sync_dir else "local-only"),
         "syncDir": sync_dir,
+        "webdav": {
+            "url": dav.get("url", ""),
+            "remotePath": dav.get("remotePath", "/agy-sync-dashboard"),
+            "username": dav.get("username", ""),
+            "hasPassword": bool(dav.get("password")),
+        },
         "deviceId": device.get("deviceId", ""),
         "deviceName": local_cfg.get("deviceName", device.get("deviceName", "")),
         "language": local_cfg.get("language", "zh-CN"),
@@ -270,7 +312,16 @@ def cmd_install(args: argparse.Namespace) -> int:
     paths = resolve_paths(args.home)
     copy_runtime_tree(REPO_ROOT, paths["plugin_dir"])
     set_plugin_enabled(paths["config_json"], True)
-    ensure_local_settings(paths, sync_dir=args.sync_dir, device_name=args.device_name, language=args.language)
+    ensure_local_settings(
+        paths,
+        sync_dir=args.sync_dir,
+        sync_mode=args.sync_mode,
+        webdav_url=args.webdav_url,
+        webdav_path=args.webdav_path,
+        webdav_user=args.webdav_user,
+        device_name=args.device_name,
+        language=args.language,
+    )
     status = build_status(paths)
     print(json.dumps({"action": "install", "ok": True, "status": status}, indent=2, ensure_ascii=False))
     return 0
@@ -336,6 +387,8 @@ def cmd_preview(args: argparse.Namespace) -> int:
     env.pop("ANTIGRAVITY_SIDECAR_WEB_PORT", None)
     if args.home:
         env["AG_SYNC_DATA_DIR"] = str(paths["data_dir"])
+    print(f"Dashboard: http://127.0.0.1:{args.port}/", flush=True)
+    print(f"Settings : http://127.0.0.1:{args.port}/settings", flush=True)
     return subprocess.run([node_exe, str(script)], check=False, env=env).returncode
 
 
@@ -374,7 +427,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_install = sub.add_parser("install", help="Install plugin into ~/.gemini/config/plugins and enable it")
+    p_install.add_argument("--sync-mode", choices=["folder", "webdav", "both", "local-only"], default=None, help="Sync transport mode")
     p_install.add_argument("--sync-dir", default=None, help="Shared sync directory path (e.g. D:\\Sync\\agy-sync-dashboard)")
+    p_install.add_argument("--webdav-url", default=None, help="WebDAV base server URL")
+    p_install.add_argument("--webdav-path", default=None, help="WebDAV remote subdirectory (default /agy-sync-dashboard)")
+    p_install.add_argument("--webdav-user", default=None, help="WebDAV username")
     p_install.add_argument("--device-name", default=None, help="Display name for this machine")
     p_install.add_argument("--language", choices=["zh-CN", "en"], default=None, help="UI language")
     p_install.set_defaults(func=cmd_install)

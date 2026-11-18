@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -7,6 +8,7 @@ import { toLocalDateKey } from '../sidecars/dashboard/collector.mjs';
 import { createDashboardService, createStandaloneHttpServer } from '../sidecars/dashboard/main.mjs';
 import { normalizeQuotaSummary } from '../sidecars/dashboard/quota.mjs';
 import { SNAPSHOT_SCHEMA_VERSION, SyncManager, mergeDeviceSnapshots } from '../sidecars/dashboard/sync.mjs';
+import { parsePropfindXml } from '../sidecars/dashboard/webdav.mjs';
 
 test('mergeDeviceSnapshots sums multiple devices additively and computes blended cache rate', () => {
   const now = Date.now();
@@ -249,4 +251,229 @@ test('normalizeQuotaSummary parses RetrieveUserQuotaSummary response.groups.buck
   assert.equal(groups[0].windows[0].kind, '5h');
   assert.equal(groups[0].windows[1].kind, 'weekly');
   assert.equal(groups[1].family, 'claude_gpt');
+});
+
+test('parsePropfindXml extracts json entries and ignores directories, hidden files, and conflicts', () => {
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+  <D:multistatus xmlns:D="DAV:">
+    <D:response>
+      <D:href>/dav/agy-sync-dashboard/devices/</D:href>
+      <D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat>
+    </D:response>
+    <D:response>
+      <D:href>/dav/agy-sync-dashboard/devices/macbook%20pro-123.json</D:href>
+      <D:propstat><D:prop><D:getetag>"abc"</D:getetag></D:prop></D:propstat>
+    </D:response>
+    <D:response>
+      <D:href>/dav/agy-sync-dashboard/devices/.hidden.json</D:href>
+      <D:propstat><D:prop><D:getetag>"h"</D:getetag></D:prop></D:propstat>
+    </D:response>
+    <D:response>
+      <D:href>/dav/agy-sync-dashboard/devices/pc.sync-conflict-20261118.json</D:href>
+      <D:propstat><D:prop><D:getetag>"c"</D:getetag></D:prop></D:propstat>
+    </D:response>
+  </D:multistatus>`;
+
+  const entries = parsePropfindXml(xml);
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].name, 'macbook pro-123.json');
+  assert.equal(entries[0].isConflict, false);
+  assert.equal(entries[1].name, 'pc.sync-conflict-20261118.json');
+  assert.equal(entries[1].isConflict, true);
+});
+
+test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConnection, and password redaction', async () => {
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-dav-'));
+  const expectedAuth = 'Basic ' + Buffer.from('reona:secret-pass', 'utf8').toString('base64');
+  const collections = new Set(['/dav', '/dav/']);
+  const files = new Map();
+
+  const now = Date.now();
+  const today = toLocalDateKey(now);
+  files.set(
+    '/dav/agy-sync-dashboard/devices/mac-studio-888888.json',
+    JSON.stringify({
+      schemaVersion: 1,
+      deviceId: 'mac-studio-888888',
+      deviceName: 'Mac Studio',
+      platform: 'darwin',
+      updatedAt: now - 2000,
+      local: {
+        collectedAt: now - 2000,
+        conversationCount: 2,
+        totals: { inputTokens: 400, outputTokens: 200, cacheReadTokens: 1400, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 2000, generations: 3 },
+        byDate: { [today]: { inputTokens: 400, outputTokens: 200, cacheReadTokens: 1400, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 2000, generations: 3 } },
+        byModel: {},
+        recentConversations: [],
+      },
+    })
+  );
+
+  const davServer = http.createServer(async (req, res) => {
+    if (req.headers.authorization !== expectedAuth) {
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="dav"' });
+      res.end();
+      return;
+    }
+
+    const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
+    const p = reqUrl.pathname;
+
+    if (req.method === 'MKCOL') {
+      const normalized = p.endsWith('/') ? p : `${p}/`;
+      if (collections.has(normalized)) {
+        res.writeHead(405);
+        res.end();
+        return;
+      }
+      collections.add(normalized);
+      collections.add(normalized.slice(0, -1));
+      res.writeHead(201);
+      res.end();
+      return;
+    }
+
+    if (req.method === 'PROPFIND') {
+      const normalized = p.endsWith('/') ? p : `${p}/`;
+      if (!collections.has(normalized) && normalized !== '/dav/agy-sync-dashboard/devices/') {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      if (normalized === '/dav/agy-sync-dashboard/devices/' && !collections.has(normalized)) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      const depth = req.headers.depth || '1';
+      let itemsXml = `<D:response><D:href>${normalized}</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response>`;
+      if (depth !== '0') {
+        for (const [fpath] of files.entries()) {
+          if (fpath.startsWith(normalized)) {
+            itemsXml += `<D:response><D:href>${fpath}</D:href><D:propstat><D:prop><D:getetag>"v1-${files.get(fpath).length}"</D:getetag></D:prop></D:propstat></D:response>`;
+          }
+        }
+      }
+      res.writeHead(207, { 'Content-Type': 'application/xml; charset=utf-8' });
+      res.end(`<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">${itemsXml}</D:multistatus>`);
+      return;
+    }
+
+    if (req.method === 'PUT') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      files.set(p, body);
+      res.writeHead(201);
+      res.end();
+      return;
+    }
+
+    if (req.method === 'GET') {
+      if (!files.has(p)) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(files.get(p));
+      return;
+    }
+
+    res.writeHead(405);
+    res.end();
+  });
+
+  await new Promise((r) => davServer.listen(0, '127.0.0.1', r));
+  const davPort = davServer.address().port;
+
+  let dashServer;
+  try {
+    const dataDir = path.join(tmpRoot, 'data');
+    const fakeCollector = {
+      async collect() {
+        return {
+          collectedAt: now,
+          conversationCount: 1,
+          totals: { inputTokens: 300, outputTokens: 100, cacheReadTokens: 600, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 1000, generations: 1, cacheHitRate: 600 / 900 },
+          latestGeneration: null,
+          byDate: { [today]: { inputTokens: 300, outputTokens: 100, cacheReadTokens: 600, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 1000, generations: 1 } },
+          byModel: {},
+          recentConversations: [],
+        };
+      },
+    };
+
+    const manager = new SyncManager({
+      paths: { pluginDataDir: dataDir, conversationsDir: path.join(tmpRoot, 'c'), summariesDb: path.join(tmpRoot, 's.db') },
+      collector: fakeCollector,
+      dataDir,
+    });
+    const service = await createDashboardService({
+      paths: { pluginDataDir: dataDir, pluginConfig: path.join(tmpRoot, 'cfg.json'), conversationsDir: path.join(tmpRoot, 'c'), summariesDb: path.join(tmpRoot, 's.db') },
+      syncManager: manager,
+      quotaClient: { async fetch() { return { connected: false, groups: [], fetchedAt: now }; } },
+    });
+
+    dashServer = createStandaloneHttpServer(service, { controlToken: 'davtok' });
+    await new Promise((r) => dashServer.listen(0, '127.0.0.1', r));
+    const dashPort = dashServer.address().port;
+    const base = `http://127.0.0.1:${dashPort}`;
+
+    // Test bad credentials first
+    const badTest = await (
+      await fetch(`${base}/api/settings/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          syncMode: 'webdav',
+          webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'reona', password: 'wrong' },
+        }),
+      })
+    ).json();
+    assert.equal(badTest.ok, false);
+    assert.match(badTest.webdav.error, /401/);
+
+    // Save valid WebDAV config
+    const saved = await (
+      await fetch(`${base}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          syncMode: 'webdav',
+          webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'reona', password: 'secret-pass' },
+          deviceName: 'WinBox',
+        }),
+      })
+    ).json();
+
+    assert.equal(saved.settings.webdav.hasPassword, true);
+    assert.equal(saved.settings.webdav.password, undefined);
+    assert.equal(saved.dashboard.syncStatus.mode, 'webdav');
+    assert.equal(saved.dashboard.merged.deviceCount, 2);
+    assert.equal(saved.dashboard.merged.totals.totalTokens, 3000);
+
+    // Omitting password in subsequent save keeps saved password working
+    const savedAgain = await (
+      await fetch(`${base}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          syncMode: 'webdav',
+          webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'reona' },
+          deviceName: 'WinBox-Renamed',
+        }),
+      })
+    ).json();
+    assert.equal(savedAgain.settings.webdav.hasPassword, true);
+    assert.equal(savedAgain.dashboard.merged.totals.totalTokens, 3000);
+
+    // Standalone /settings configuration page route works
+    const settingsPage = await fetch(`${base}/settings`);
+    assert.equal(settingsPage.status, 200);
+    assert.match(await settingsPage.text(), /id="panel-settings"/);
+  } finally {
+    if (dashServer) await new Promise((r) => dashServer.close(r));
+    await new Promise((r) => davServer.close(r));
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
 });

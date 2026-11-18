@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -8,7 +9,76 @@ import { readHostTheme } from '../../compat/host-theme.mjs';
 import { resolvePaths } from '../../compat/platform.mjs';
 import { loadSidecarSdk } from '../../compat/sdk.mjs';
 import { QuotaClient } from './quota.mjs';
-import { SyncManager } from './sync.mjs';
+import { SyncManager, sanitizeSettingsForClient } from './sync.mjs';
+
+function execFilePromise(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: 60_000, windowsHide: false, ...options }, (err, stdout, stderr) => {
+      if (err) {
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+export async function pickNativeFolder(initialDir = '') {
+  const safeInit = initialDir && fs.existsSync(initialDir) ? path.resolve(initialDir) : '';
+  if (process.platform === 'win32') {
+    const psScript = [
+      'Add-Type -AssemblyName System.Windows.Forms;',
+      '$f = New-Object System.Windows.Forms.Form;',
+      '$f.TopMost = $true;',
+      '$d = New-Object System.Windows.Forms.FolderBrowserDialog;',
+      '$d.Description = "选择跨设备同步文件夹 (如 D:\\Sync\\agy-sync-dashboard)";',
+      '$d.ShowNewFolderButton = $true;',
+      'if ($env:AGY_INIT_DIR -and (Test-Path $env:AGY_INIT_DIR)) { $d.SelectedPath = $env:AGY_INIT_DIR };',
+      'if ($d.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }',
+    ].join(' ');
+    try {
+      const { stdout } = await execFilePromise(
+        'powershell.exe',
+        ['-NoProfile', '-Sta', '-NonInteractive', '-Command', psScript],
+        { env: { ...process.env, AGY_INIT_DIR: safeInit }, windowsHide: true }
+      );
+      const selected = String(stdout || '').trim();
+      return selected ? { cancelled: false, path: selected } : { cancelled: true, path: '' };
+    } catch (err) {
+      return { cancelled: true, path: '', error: err?.message || 'Folder dialog unavailable' };
+    }
+  }
+
+  if (process.platform === 'darwin') {
+    try {
+      const { stdout } = await execFilePromise('osascript', [
+        '-e',
+        'POSIX path of (choose folder with prompt "Select Antigravity Sync Folder")',
+      ]);
+      const selected = String(stdout || '').trim().replace(/\/+$/, '');
+      return selected ? { cancelled: false, path: selected } : { cancelled: true, path: '' };
+    } catch {
+      return { cancelled: true, path: '' };
+    }
+  }
+
+  for (const [bin, args] of [
+    ['zenity', ['--file-selection', '--directory', '--title=Select Sync Folder']],
+    ['kdialog', ['--getexistingdirectory', safeInit || process.env.HOME || '.']],
+  ]) {
+    try {
+      const { stdout } = await execFilePromise(bin, args);
+      const selected = String(stdout || '').trim();
+      if (selected) return { cancelled: false, path: selected };
+      return { cancelled: true, path: '' };
+    } catch (err) {
+      if (err?.code === 1 || err?.code === 5) return { cancelled: true, path: '' };
+    }
+  }
+  return { cancelled: true, path: '', error: 'No native folder picker (zenity/kdialog) available' };
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -104,7 +174,11 @@ export async function createDashboardService(options = {}) {
 
   async function getSettings() {
     const { config, candidates, device } = await syncManager.ensureIdentityAndConfig();
-    return { settings: config, candidates, device };
+    return { settings: sanitizeSettingsForClient(config), candidates, device };
+  }
+
+  async function testSettings(payload) {
+    return syncManager.testConnection(payload || {});
   }
 
   async function getThemeCss() {
@@ -120,6 +194,7 @@ export async function createDashboardService(options = {}) {
     getDashboard,
     updateSettings,
     getSettings,
+    testSettings,
     getThemeCss,
   };
 }
@@ -190,6 +265,31 @@ export function createStandaloneHttpServer(service, options = {}) {
         return;
       }
 
+      if (url.pathname === '/api/settings/test' && req.method === 'POST') {
+        let raw = '';
+        for await (const chunk of req) {
+          raw += chunk;
+          if (raw.length > 32 * 1024) {
+            sendJson(413, { error: 'Payload too large' });
+            return;
+          }
+        }
+        const parsed = raw ? JSON.parse(raw) : {};
+        sendJson(200, await service.testSettings(parsed));
+        return;
+      }
+
+      if (url.pathname === '/api/settings/pick-folder' && req.method === 'POST') {
+        let raw = '';
+        for await (const chunk of req) {
+          raw += chunk;
+          if (raw.length > 4096) break;
+        }
+        const parsed = raw ? JSON.parse(raw) : {};
+        sendJson(200, await pickNativeFolder(parsed.initialDir || ''));
+        return;
+      }
+
       if (req.method !== 'GET') {
         res.writeHead(405);
         res.end();
@@ -220,7 +320,7 @@ export function createStandaloneHttpServer(service, options = {}) {
         return;
       }
 
-      if (url.pathname === '/' || url.pathname === '/index.html') {
+      if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/settings') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(readStatic('index.html'));
         return;
@@ -293,6 +393,7 @@ async function startRuntime() {
     const app = new SidecarApp();
 
     app.api('/', () => new Response(readStatic('index.html'), { contentType: 'text/html', headers: { 'Cache-Control': 'no-store' } }), 'GET');
+    app.api('/settings', () => new Response(readStatic('index.html'), { contentType: 'text/html', headers: { 'Cache-Control': 'no-store' } }), 'GET');
     app.api('/styles.css', () => new Response(readStatic('styles.css'), { contentType: 'text/css', headers: { 'Cache-Control': 'no-store' } }), 'GET');
     app.api('/theme.css', async () => new Response(await service.getThemeCss(), { contentType: 'text/css', headers: { 'Cache-Control': 'no-store' } }), 'GET');
     app.page('/app.js', () => new Response(readStatic('app.js'), { contentType: 'application/javascript', headers: { 'Cache-Control': 'no-store' } }));
@@ -326,6 +427,25 @@ async function startRuntime() {
           });
         }
       },
+      'POST'
+    );
+    app.api(
+      '/api/settings/test',
+      async (data) => {
+        try {
+          return await service.testSettings(data);
+        } catch (err) {
+          return new Response(JSON.stringify({ ok: false, error: err?.message || 'Test failed' }), {
+            status: 400,
+            contentType: 'application/json',
+          });
+        }
+      },
+      'POST'
+    );
+    app.api(
+      '/api/settings/pick-folder',
+      async (data) => pickNativeFolder(data?.initialDir || ''),
       'POST'
     );
 

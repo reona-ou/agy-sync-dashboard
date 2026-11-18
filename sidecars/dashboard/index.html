@@ -53,28 +53,96 @@
       <section class="panel" role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" hidden>
         <article class="card settings-card">
           <div class="card-head">
-            <h2 class="card-title" id="ui-settings-title">多设备同步设置</h2>
+            <h2 class="card-title" id="ui-settings-title">多设备同步配置</h2>
             <span class="mono tag" id="settings-device-id">--</span>
           </div>
           <form id="settings-form" class="form-stack">
-            <label class="field">
-              <span class="field-label" id="ui-label-syncdir">同步文件夹路径 (Syncthing / 网盘)</span>
-              <input class="input mono" id="input-syncdir" name="syncDir" type="text" placeholder="例如 D:\Sync\agy-sync-dashboard" autocomplete="off">
-            </label>
-            <div id="sync-candidates" class="candidates-row" hidden></div>
+            <div class="field">
+              <span class="field-label" id="ui-label-syncmode">同步方式</span>
+              <div class="mode-grid" id="sync-mode-group" role="radiogroup" aria-label="同步方式">
+                <button type="button" class="mode-btn" role="radio" aria-checked="true" data-mode="folder" id="mode-btn-folder">同步目录</button>
+                <button type="button" class="mode-btn" role="radio" aria-checked="false" data-mode="webdav" id="mode-btn-webdav">WebDAV</button>
+                <button type="button" class="mode-btn" role="radio" aria-checked="false" data-mode="both" id="mode-btn-both">目录 + WebDAV</button>
+                <button type="button" class="mode-btn" role="radio" aria-checked="false" data-mode="local-only" id="mode-btn-local">仅本机</button>
+              </div>
+            </div>
 
-            <label class="field">
-              <span class="field-label" id="ui-label-devicename">本机显示名称</span>
-              <input class="input" id="input-devicename" name="deviceName" type="text" maxlength="48" autocomplete="off">
-            </label>
+            <div id="section-folder" class="subcard">
+              <div class="subcard-head">
+                <span class="subcard-title" id="ui-folder-section-title">本地 / Syncthing / 网盘同步目录</span>
+                <button type="button" class="chip-btn" id="btn-test-folder">测试目录</button>
+              </div>
+              <div class="input-with-btn">
+                <input class="input mono" id="input-syncdir" name="syncDir" type="text" placeholder="例如 D:\Sync\agy-sync-dashboard" autocomplete="off">
+                <button type="button" class="icon-btn" id="btn-pick-folder">选择目录…</button>
+              </div>
+              <div id="sync-candidates" class="candidates-row" hidden></div>
+            </div>
 
-            <label class="field">
-              <span class="field-label" id="ui-label-lang">界面语言</span>
-              <select class="input" id="input-lang" name="language">
-                <option value="zh-CN">简体中文</option>
-                <option value="en">English</option>
-              </select>
-            </label>
+            <div id="section-webdav" class="subcard" hidden>
+              <div class="subcard-head">
+                <span class="subcard-title" id="ui-webdav-section-title">WebDAV 云同步</span>
+                <button type="button" class="chip-btn" id="btn-test-webdav">测试连接</button>
+              </div>
+              <div class="presets-row">
+                <span class="field-label" id="ui-presets-label">常用模板:</span>
+                <button type="button" class="chip-btn" data-dav-url="https://dav.jianguoyun.com/dav/" id="preset-jianguoyun">坚果云</button>
+                <button type="button" class="chip-btn" data-dav-url="http://127.0.0.1:5244/dav" id="preset-alist">Alist</button>
+                <button type="button" class="chip-btn" data-dav-url="https://cloud.example.com/remote.php/dav/files/USERNAME" id="preset-nextcloud">Nextcloud</button>
+              </div>
+              <label class="field">
+                <span class="field-label" id="ui-label-davurl">服务器地址 (URL)</span>
+                <input class="input mono" id="input-dav-url" name="davUrl" type="url" placeholder="https://dav.jianguoyun.com/dav/" autocomplete="off">
+              </label>
+              <label class="field">
+                <span class="field-label" id="ui-label-davpath">远端同步子目录</span>
+                <input class="input mono" id="input-dav-path" name="davPath" type="text" placeholder="/agy-sync-dashboard" autocomplete="off">
+              </label>
+              <div class="field-grid">
+                <label class="field">
+                  <span class="field-label" id="ui-label-davuser">用户名</span>
+                  <input class="input" id="input-dav-user" name="davUser" type="text" autocomplete="username">
+                </label>
+                <label class="field">
+                  <span class="field-label" id="ui-label-davpass">应用密码</span>
+                  <div class="input-with-btn">
+                    <input class="input" id="input-dav-pass" name="davPass" type="password" placeholder="输入密码 / 应用密码" autocomplete="current-password">
+                    <button type="button" class="chip-btn" id="btn-clear-davpass" hidden>清除</button>
+                  </div>
+                </label>
+              </div>
+              <div class="field-hint" id="dav-pass-hint" hidden></div>
+            </div>
+
+            <div id="test-result-box" class="test-box" hidden aria-live="polite"></div>
+
+            <div class="subcard">
+              <div class="subcard-head">
+                <span class="subcard-title" id="ui-prefs-section-title">设备与偏好设置</span>
+              </div>
+              <label class="field">
+                <span class="field-label" id="ui-label-devicename">本机显示名称</span>
+                <input class="input" id="input-devicename" name="deviceName" type="text" maxlength="48" autocomplete="off">
+              </label>
+              <div class="field-grid">
+                <label class="field">
+                  <span class="field-label" id="ui-label-interval">自动同步间隔</span>
+                  <select class="input" id="input-interval" name="syncIntervalMs">
+                    <option value="15000">15 秒</option>
+                    <option value="30000">30 秒</option>
+                    <option value="60000">60 秒</option>
+                    <option value="300000">5 分钟</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span class="field-label" id="ui-label-lang">界面语言</span>
+                  <select class="input" id="input-lang" name="language">
+                    <option value="zh-CN">简体中文</option>
+                    <option value="en">English</option>
+                  </select>
+                </label>
+              </div>
+            </div>
 
             <div class="form-actions">
               <button type="submit" class="primary-btn" id="btn-save-settings">保存并立即同步</button>

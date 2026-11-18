@@ -5,9 +5,34 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectSyncCandidates, readJsonSafe, resolvePaths } from '../../compat/platform.mjs';
 import { LocalUsageCollector, toLocalDateKey } from './collector.mjs';
+import { WebDavSyncClient, normalizeWebDavConfig, redactWebDavConfig } from './webdav.mjs';
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
+export const VALID_SYNC_MODES = ['folder', 'webdav', 'both', 'local-only'];
 const DEFAULT_SYNC_INTERVAL_MS = 30_000;
+
+async function writeConfigJsonSecure(file, obj) {
+  await fsp.writeFile(file, JSON.stringify(obj, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+  if (process.platform !== 'win32') {
+    await fsp.chmod(file, 0o600).catch(() => {});
+  }
+}
+
+export function sanitizeSettingsForClient(config = {}) {
+  return {
+    syncMode: VALID_SYNC_MODES.includes(config.syncMode)
+      ? config.syncMode
+      : config.syncDir
+        ? 'folder'
+        : 'local-only',
+    syncDir: config.syncDir || '',
+    webdav: redactWebDavConfig(config.webdav || {}),
+    deviceName: config.deviceName || '',
+    language: config.language === 'en' ? 'en' : 'zh-CN',
+    syncIntervalMs: Number(config.syncIntervalMs || DEFAULT_SYNC_INTERVAL_MS),
+    updatedAt: Number(config.updatedAt || 0),
+  };
+}
 
 function sanitizeSlug(raw) {
   return String(raw || 'device')
@@ -174,12 +199,57 @@ export class SyncManager {
   constructor(options = {}) {
     this.paths = options.paths || resolvePaths();
     this.collector = options.collector || new LocalUsageCollector(this.paths);
+    this.webdavClient = options.webdavClient || new WebDavSyncClient(options.webdavOptions);
     this.dataDir = options.dataDir || this.paths.pluginDataDir;
     this.configFile = path.join(this.dataDir, 'config.json');
     this.deviceFile = path.join(this.dataDir, 'device.json');
     this.lastMerged = null;
     this.lastSyncAt = 0;
     this.lastSyncStatus = { ok: false, mode: 'local-only', error: null, conflictFiles: [] };
+  }
+
+  mergeConfigDraft(baseConfig, patch = {}) {
+    const nextConfig = {
+      ...baseConfig,
+      webdav: normalizeWebDavConfig(baseConfig.webdav || {}),
+    };
+
+    if (typeof patch.syncMode === 'string' && VALID_SYNC_MODES.includes(patch.syncMode)) {
+      nextConfig.syncMode = patch.syncMode;
+    }
+    if (typeof patch.syncDir === 'string') {
+      nextConfig.syncDir = patch.syncDir.trim();
+      if (!patch.syncMode && patch.syncDir.trim() && nextConfig.syncMode === 'local-only') {
+        nextConfig.syncMode = 'folder';
+      }
+    }
+    if (patch.webdav && typeof patch.webdav === 'object') {
+      const incoming = patch.webdav;
+      const prevPass = nextConfig.webdav.password || '';
+      const mergedPass =
+        incoming.clearPassword === true
+          ? ''
+          : typeof incoming.password === 'string' && incoming.password.length > 0
+            ? incoming.password
+            : prevPass;
+      nextConfig.webdav = normalizeWebDavConfig({
+        url: typeof incoming.url === 'string' ? incoming.url : nextConfig.webdav.url,
+        remotePath: typeof incoming.remotePath === 'string' ? incoming.remotePath : nextConfig.webdav.remotePath,
+        username: typeof incoming.username === 'string' ? incoming.username : nextConfig.webdav.username,
+        password: mergedPass,
+      });
+    }
+    if (typeof patch.deviceName === 'string' && patch.deviceName.trim()) {
+      nextConfig.deviceName = patch.deviceName.trim();
+    }
+    if (patch.language === 'zh-CN' || patch.language === 'en') {
+      nextConfig.language = patch.language;
+    }
+    if (typeof patch.syncIntervalMs === 'number' && patch.syncIntervalMs >= 5000) {
+      nextConfig.syncIntervalMs = Math.floor(patch.syncIntervalMs);
+    }
+
+    return nextConfig;
   }
 
   async ensureIdentityAndConfig() {
@@ -205,8 +275,11 @@ export class SyncManager {
     let dirty = false;
 
     if (!config) {
+      const defaultDir = process.env.AGY_SYNC_DIR || candidates[0] || '';
       config = {
-        syncDir: process.env.AGY_SYNC_DIR || candidates[0] || '',
+        syncMode: defaultDir ? 'folder' : 'local-only',
+        syncDir: defaultDir,
+        webdav: normalizeWebDavConfig({}),
         deviceName: device.deviceName || os.hostname(),
         language: 'zh-CN',
         syncIntervalMs: DEFAULT_SYNC_INTERVAL_MS,
@@ -216,6 +289,15 @@ export class SyncManager {
     } else {
       if (!config.syncDir && (process.env.AGY_SYNC_DIR || candidates[0])) {
         config.syncDir = process.env.AGY_SYNC_DIR || candidates[0] || '';
+        dirty = true;
+      }
+      if (!VALID_SYNC_MODES.includes(config.syncMode)) {
+        config.syncMode = config.syncDir ? 'folder' : 'local-only';
+        dirty = true;
+      }
+      const normDav = normalizeWebDavConfig(config.webdav || {});
+      if (!config.webdav || JSON.stringify(normDav) !== JSON.stringify(config.webdav)) {
+        config.webdav = normDav;
         dirty = true;
       }
       if (!config.deviceName) {
@@ -233,7 +315,7 @@ export class SyncManager {
     }
 
     if (dirty) {
-      await fsp.writeFile(this.configFile, JSON.stringify(config, null, 2) + '\n', 'utf8');
+      await writeConfigJsonSecure(this.configFile, config);
     }
 
     return { device, config, candidates };
@@ -241,31 +323,66 @@ export class SyncManager {
 
   async updateSettings(patch = {}) {
     const { device, config, candidates } = await this.ensureIdentityAndConfig();
+    const nextConfig = this.mergeConfigDraft(config, patch);
 
-    const nextConfig = { ...config };
-    if (typeof patch.syncDir === 'string') {
-      nextConfig.syncDir = patch.syncDir.trim();
-    }
-    if (typeof patch.deviceName === 'string' && patch.deviceName.trim()) {
-      nextConfig.deviceName = patch.deviceName.trim();
+    if (nextConfig.deviceName !== device.deviceName) {
       device.deviceName = nextConfig.deviceName;
       await fsp.writeFile(this.deviceFile, JSON.stringify(device, null, 2) + '\n', 'utf8');
     }
-    if (patch.language === 'zh-CN' || patch.language === 'en') {
-      nextConfig.language = patch.language;
-    }
-    if (typeof patch.syncIntervalMs === 'number' && patch.syncIntervalMs >= 5000) {
-      nextConfig.syncIntervalMs = Math.floor(patch.syncIntervalMs);
-    }
+
     nextConfig.updatedAt = Date.now();
-    await fsp.writeFile(this.configFile, JSON.stringify(nextConfig, null, 2) + '\n', 'utf8');
+    await writeConfigJsonSecure(this.configFile, nextConfig);
 
     const synced = await this.syncOnce();
     return {
-      settings: nextConfig,
+      settings: sanitizeSettingsForClient(nextConfig),
       candidates,
       synced,
     };
+  }
+
+  async testConnection(patch = {}) {
+    const { config } = await this.ensureIdentityAndConfig();
+    const draft = this.mergeConfigDraft(config, patch);
+    const target = patch.target || draft.syncMode;
+    const result = { ok: true, target, folder: null, webdav: null };
+
+    if (target === 'folder' || target === 'both') {
+      const dir = (draft.syncDir || '').trim();
+      if (!dir) {
+        result.folder = { ok: false, error: 'Sync folder path is empty' };
+        result.ok = false;
+      } else {
+        try {
+          const devicesDir = path.join(dir, 'devices');
+          await fsp.mkdir(devicesDir, { recursive: true });
+          const probeFile = path.join(devicesDir, `.probe-${process.pid}.tmp`);
+          await fsp.writeFile(probeFile, 'ok', 'utf8');
+          await fsp.unlink(probeFile);
+          const { peerSnapshots, conflictFiles } = await this.readAllPeerSnapshots(dir);
+          result.folder = {
+            ok: true,
+            syncDir: dir,
+            deviceFiles: peerSnapshots.map((p) => `${p.deviceId}.json`),
+            conflictFiles,
+          };
+        } catch (err) {
+          result.folder = { ok: false, syncDir: dir, error: err?.message || String(err) };
+          result.ok = false;
+        }
+      }
+    }
+
+    if (target === 'webdav' || target === 'both') {
+      try {
+        result.webdav = await this.webdavClient.testConnection(draft.webdav);
+      } catch (err) {
+        result.webdav = { ok: false, error: err?.message || String(err) };
+        result.ok = false;
+      }
+    }
+
+    return result;
   }
 
   async writeDeviceSnapshot(syncDir, snapshot) {
@@ -334,48 +451,91 @@ export class SyncManager {
       local: localSnapshot,
     };
 
+    const configuredMode = VALID_SYNC_MODES.includes(config.syncMode)
+      ? config.syncMode
+      : config.syncDir
+        ? 'folder'
+        : 'local-only';
     const syncDir = (config.syncDir || '').trim();
-    let peerSnapshots = [];
-    let conflictFiles = [];
-    let syncMode = 'local-only';
-    let syncError = null;
-    let snapshotPath = null;
+    const useFolder = (configuredMode === 'folder' || configuredMode === 'both') && Boolean(syncDir);
+    const useWebDav = (configuredMode === 'webdav' || configuredMode === 'both') && Boolean(config.webdav?.url);
 
-    if (syncDir) {
+    const byId = new Map();
+    const conflictFiles = [];
+    const errors = [];
+    let snapshotPath = null;
+    let remoteSnapshotUrl = null;
+    let folderOk = false;
+    let webdavOk = false;
+
+    const addPeer = (peer) => {
+      if (!peer?.deviceId) return;
+      const existing = byId.get(peer.deviceId);
+      if (!existing || Number(peer.updatedAt || 0) >= Number(existing.updatedAt || 0)) {
+        byId.set(peer.deviceId, peer);
+      }
+    };
+
+    if (useFolder) {
       try {
         snapshotPath = await this.writeDeviceSnapshot(syncDir, mySnapshot);
         const res = await this.readAllPeerSnapshots(syncDir);
-        peerSnapshots = res.peerSnapshots;
-        conflictFiles = res.conflictFiles;
-        syncMode = 'sync-folder';
+        res.peerSnapshots.forEach(addPeer);
+        conflictFiles.push(...res.conflictFiles);
+        folderOk = true;
       } catch (err) {
-        syncError = err?.message || String(err);
-        syncMode = 'sync-error';
+        errors.push(`Folder: ${err?.message || String(err)}`);
+      }
+    }
+
+    if (useWebDav) {
+      try {
+        remoteSnapshotUrl = await this.webdavClient.uploadSnapshot(config.webdav, mySnapshot);
+        const res = await this.webdavClient.fetchPeerSnapshots(config.webdav, mySnapshot.deviceId);
+        res.peerSnapshots.forEach(addPeer);
+        conflictFiles.push(...res.conflictFiles);
+        webdavOk = true;
+      } catch (err) {
+        errors.push(`WebDAV: ${err?.message || String(err)}`);
       }
     }
 
     // Replace/inject current device using authoritative in-memory snapshot.
-    const byId = new Map();
-    for (const peer of peerSnapshots) {
-      byId.set(peer.deviceId, peer);
-    }
     byId.set(mySnapshot.deviceId, mySnapshot);
 
+    let syncMode = 'local-only';
+    if (errors.length > 0 && !folderOk && !webdavOk) {
+      syncMode = 'sync-error';
+    } else if (folderOk && webdavOk) {
+      syncMode = 'both';
+    } else if (webdavOk) {
+      syncMode = 'webdav';
+    } else if (folderOk) {
+      syncMode = 'sync-folder';
+    } else if (configuredMode === 'webdav' || configuredMode === 'folder' || configuredMode === 'both') {
+      // Selected sync mode lacks target URL/path or encountered partial error
+      syncMode = errors.length > 0 ? 'sync-error' : 'local-only';
+    }
+
+    const syncError = errors.length ? errors.join(' | ') : null;
     const merged = mergeDeviceSnapshots(Array.from(byId.values()), mySnapshot.deviceId);
     this.lastSyncAt = Date.now();
     this.lastSyncStatus = {
-      ok: syncMode !== 'sync-error',
+      ok: syncMode !== 'sync-error' && !syncError,
       mode: syncMode,
+      configuredMode,
       syncDir,
+      remoteDirUrl: config.webdav?.url ? `${config.webdav.url.replace(/\/+$/, '')}${config.webdav.remotePath || '/agy-sync-dashboard'}/devices/` : '',
       snapshotPath,
+      remoteSnapshotUrl,
       error: syncError,
-      conflictFiles,
+      conflictFiles: [...new Set(conflictFiles)],
       lastSyncAt: this.lastSyncAt,
     };
 
     this.lastMerged = {
       device: mySnapshot,
-      settings: config,
+      settings: sanitizeSettingsForClient(config),
       candidates,
       syncStatus: this.lastSyncStatus,
       merged,

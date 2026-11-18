@@ -603,6 +603,126 @@ body {
   word-break: break-all;
 }
 
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mode-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.mode-btn:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.mode-btn[aria-checked='true'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  font-weight: 600;
+}
+
+.subcard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+
+.subcard[hidden] {
+  display: none;
+}
+
+.subcard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.subcard-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.input-with-btn {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.input-with-btn .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.input-with-btn .icon-btn,
+.input-with-btn .chip-btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@container (max-width: 280px) {
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.presets-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.field-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.test-box {
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  word-break: break-word;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.test-box.ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+
+.test-box.err {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
 .muted {
   color: var(--muted);
   margin: 0;

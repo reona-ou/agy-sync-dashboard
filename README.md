@@ -1,17 +1,21 @@
 # Antigravity Sync Dashboard (`agy-sync-dashboard`)
 
-原生 Antigravity 右侧辅助栏插件：直接以只读模式读取本机 `~/.gemini/antigravity` SQLite 对话数据库与本地 `language_server` RPC 配额，通过 **Syncthing / 网盘共享文件夹** 在多台个人设备之间安全交换各自快照，按 **多设备累加合并（今日 / 14 天趋势 / 历史总计 / 模型 / 最近对话）** 展示用量。
+原生 Antigravity 右侧辅助栏插件：直接以只读模式读取本机 `~/.gemini/antigravity` SQLite 对话数据库与本地 `language_server` RPC 配额，通过 **Syncthing / 网盘共享文件夹** 或 **WebDAV（坚果云 / Alist / Nextcloud 等）** 在多台个人设备之间安全交换各自快照，按 **多设备累加合并（今日 / 14 天趋势 / 历史总计 / 模型 / 最近对话）** 展示用量，并内置可视化配置页面。
 
 ## 核心特性
 
 - **原生侧边栏集成**：遵循 Antigravity 插件与 Sidecar 规范（`SIDECAR_UI_ENTRYPOINT_AUX_PANE`），**不修改** `app.asar`，不注入编辑器 DOM。
+- **内置可视化配置页**：在右侧辅助栏 **设置** 标签页（或预览地址 `http://127.0.0.1:17920/settings`）中直接切换同步方式：
+  - **同步目录（Syncthing / 网盘）**：支持一键调起系统原生文件夹选择框、自动检测候选目录与目录可读写测试。
+  - **WebDAV 云同步**：内置无依赖 WebDAV 客户端与常用服务模板（坚果云 / Alist / Nextcloud），支持一键测试连接、远端目录自动创建与密码脱敏保留。
+  - **目录 + WebDAV 双通道同时同步**，或无网络时回退为 **仅本机** 模式。
 - **零外部运行时依赖**：仅使用 Antigravity 内置 Node.js（`node:sqlite` + 原生 `fetch`）与 Python 3.10+ 标准库安装脚本。
 - **按设备独立文件累加，永不互相覆盖**：
-  - 每台设备仅写入自己独立的 `<syncDir>/devices/<deviceId>.json`（原子写入 `.syncthing.<deviceId>.<pid>.tmp` 后重命名）。
-  - 汇总时自动扫描 `<syncDir>/devices/*.json`，跳过临时文件与 `.sync-conflict` 冲突文件，逐字段累加各设备统计。
+  - 每台设备仅写入自己独立的 `devices/<deviceId>.json`（本地目录使用 `.syncthing.*.tmp` 原子重命名；WebDAV 直接 `PUT` 并基于 ETag 缓存增量拉取）。
+  - 汇总时自动忽略临时文件与 `.sync-conflict` 冲突文件，逐字段累加各设备统计。
   - 单机内部按 `responseId` / `messageId` 去重，避免子代理或重试统计翻倍。
 - **实时账号限额展示**：直接查询本机运行中的 Antigravity `language_server`（`5h` / 周额度及倒计时）。
-- **回合结束自动触发同步**：内置 `Stop` Hook（`hooks/on-stop.mjs`），每次对话回合结束自动通知后台刷新快照，并有 30 秒周期同步兜底。
+- **回合结束自动触发同步**：内置 `Stop` Hook（`hooks/on-stop.mjs`），每次对话回合结束自动通知后台刷新快照，并有周期同步兜底。
 
 ---
 
@@ -93,12 +97,13 @@ python3 manage.py status
 
 ---
 
-### 第四步：在 Antigravity 中打开面板
+### 第四步：在内置配置页设置同步目录或 WebDAV
 
 1. 安装或更新插件后，**完全重启一次 Antigravity 桌面客户端**（若首次加载未出现侧边栏入口）。
-2. 在 Antigravity 窗口右侧辅助栏（Auxiliary Pane）切换到 **Sync Dashboard**。
-3. 查看 **总览 / 设备 / 模型 / 设置**：
-   - 等待 Syncthing 把其他设备的 `<deviceId>.json` 同步到 `<syncDir>/devices/` 后，点击右上角 **同步** 或等待 30 秒自动刷新，即可看到多设备累加总计和每台设备的独立贡献占比。
+2. 在 Antigravity 窗口右侧辅助栏打开 **AGY Sync Dashboard**，切换到 **设置** 标签页（也可运行 `python manage.py preview` 后直接打开浏览器访问 `http://127.0.0.1:17920/settings`）：
+   - **同步目录模式**：点击 **选择目录…** 调用系统原生文件夹选择器，或直接点击检测到的候选目录，点击 **测试目录** 确认可写后点击 **保存并立即同步**。
+   - **WebDAV 模式**（如坚果云、Alist、Nextcloud）：切换为 `WebDAV` 或 `目录 + WebDAV`，填写/点击模板填入服务器地址、子目录（默认 `/agy-sync-dashboard`）、用户名与应用密码，点击 **测试连接** 验证返回设备文件列表后再保存（后续修改其他配置时密码框留空即可保持已保存密码不变）。
+3. 等待其他设备的 `<deviceId>.json` 同步到达后，点击右上角 **同步** 或等待自动刷新，即可在 **总览 / 设备 / 模型** 查看多设备合并数据。
 
 ---
 
