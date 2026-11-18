@@ -451,6 +451,56 @@ body {
   background: var(--agy-danger);
 }
 
+.quota-forecast {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  margin-top: 2px;
+  border-radius: 7px;
+  background: var(--agy-surface-2);
+  border: 1px solid var(--agy-border);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--agy-muted);
+}
+
+.forecast-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--agy-fg);
+}
+
+.forecast-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+
+.forecast-runway {
+  font-weight: 500;
+  color: var(--agy-muted);
+}
+
+.forecast-runway.ok {
+  color: var(--agy-ok);
+}
+
+.forecast-runway.warn {
+  color: var(--agy-warn);
+}
+
+.forecast-runway.danger {
+  color: var(--agy-danger);
+}
+
+.forecast-rate {
+  color: var(--agy-muted);
+}
+
 /* 14-day daily chart */
 .chart-wrap {
   display: flex;

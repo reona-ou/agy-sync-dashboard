@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectSyncCandidates, readJsonSafe, resolvePaths } from '../../compat/platform.mjs';
 import { LocalUsageCollector, toLocalDateKey } from './collector.mjs';
+import { classifyModelFamily } from './forecast.mjs';
 import { WebDavSyncClient, normalizeWebDavConfig, redactWebDavConfig } from './webdav.mjs';
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
@@ -95,6 +96,8 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
 
   const byDateMap = new Map();
   const byModelMap = new Map();
+  const bySlot = Object.create(null);
+  const legacyByDate = Object.create(null);
   const allRecent = [];
 
   for (const snap of valid) {
@@ -105,6 +108,48 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
     for (const [dateKey, bucket] of Object.entries(loc.byDate || {})) {
       if (!byDateMap.has(dateKey)) byDateMap.set(dateKey, emptyBucket());
       addBucket(byDateMap.get(dateKey), bucket);
+    }
+
+    if (loc.bySlot && typeof loc.bySlot === 'object' && Object.keys(loc.bySlot).length > 0) {
+      for (const [slotKey, famMap] of Object.entries(loc.bySlot)) {
+        if (!bySlot[slotKey]) bySlot[slotKey] = Object.create(null);
+        for (const [fam, bucket] of Object.entries(famMap || {})) {
+          if (!bySlot[slotKey][fam]) {
+            bySlot[slotKey][fam] = { totalTokens: 0, nonCacheTokens: 0, generations: 0 };
+          }
+          const dst = bySlot[slotKey][fam];
+          dst.totalTokens += Number(bucket?.totalTokens || 0);
+          dst.nonCacheTokens += Number(bucket?.nonCacheTokens || 0);
+          dst.generations += Number(bucket?.generations || 0);
+        }
+      }
+    } else if (loc.byDate) {
+      const famTotals = Object.create(null);
+      let famSum = 0;
+      for (const [mId, mBucket] of Object.entries(loc.byModel || {})) {
+        const fam = classifyModelFamily(mId, mBucket?.displayName);
+        const tok = Number(mBucket?.totalTokens || 0);
+        famTotals[fam] = (famTotals[fam] || 0) + tok;
+        famSum += tok;
+      }
+      const shares = famSum > 0
+        ? Object.entries(famTotals).map(([fam, tok]) => [fam, tok / famSum])
+        : [['gemini', 1]];
+      for (const [dateKey, bucket] of Object.entries(loc.byDate || {})) {
+        if (!legacyByDate[dateKey]) legacyByDate[dateKey] = Object.create(null);
+        const tot = Number(bucket?.totalTokens || 0);
+        const nonCache = Number(bucket?.inputTokens || 0) + Number(bucket?.outputTokens || 0);
+        const gens = Number(bucket?.generations || 0);
+        for (const [fam, ratio] of shares) {
+          if (!legacyByDate[dateKey][fam]) {
+            legacyByDate[dateKey][fam] = { totalTokens: 0, nonCacheTokens: 0, generations: 0 };
+          }
+          const dst = legacyByDate[dateKey][fam];
+          dst.totalTokens += Math.round(tot * ratio);
+          dst.nonCacheTokens += Math.round(nonCache * ratio);
+          dst.generations += Math.round(gens * ratio);
+        }
+      }
     }
 
     for (const [modelId, mBucket] of Object.entries(loc.byModel || {})) {
@@ -185,6 +230,8 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
     },
     today: todayBucket,
     byDate,
+    bySlot,
+    legacyByDate,
     models,
     devices,
     recentConversations,

@@ -6,8 +6,9 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readHostTheme } from '../../compat/host-theme.mjs';
-import { resolvePaths } from '../../compat/platform.mjs';
+import { readJsonSafe, resolvePaths } from '../../compat/platform.mjs';
 import { loadSidecarSdk } from '../../compat/sdk.mjs';
+import { buildQuotaForecasts } from './forecast.mjs';
 import { QuotaClient } from './quota.mjs';
 import { SyncManager, sanitizeSettingsForClient } from './sync.mjs';
 
@@ -156,10 +157,39 @@ export async function createDashboardService(options = {}) {
     return inFlightSync;
   };
 
+  const calibrationFile = path.join(paths.pluginDataDir, 'quota-calibration.json');
+  let calibration = readJsonSafe(calibrationFile, {});
+  if (!calibration || typeof calibration !== 'object') calibration = {};
+
+  function applyForecastAndStrip(synced, quota) {
+    const { quota: enrichedQuota, calibrationUpdates } = buildQuotaForecasts({
+      quota,
+      merged: synced?.merged,
+      calibration,
+      nowMs: Date.now(),
+    });
+    if (calibrationUpdates && Object.keys(calibrationUpdates).length > 0) {
+      calibration = { ...calibration, ...calibrationUpdates };
+      void fsp
+        .writeFile(calibrationFile, JSON.stringify(calibration, null, 2) + '\n', 'utf8')
+        .catch(() => {});
+    }
+    const cleanSynced = synced ? { ...synced } : synced;
+    if (cleanSynced?.merged) {
+      const { bySlot: _bs, legacyByDate: _lbd, ...restMerged } = cleanSynced.merged;
+      cleanSynced.merged = restMerged;
+    }
+    if (cleanSynced?.device?.local) {
+      const { bySlot: _lbs, ...restLocal } = cleanSynced.device.local;
+      cleanSynced.device = { ...cleanSynced.device, local: restLocal };
+    }
+    return { quota: enrichedQuota, cleanSynced };
+  }
+
   async function getDashboard({ forceSync = false, forceQuota = false } = {}) {
     const stale = !syncManager.lastMerged || Date.now() - syncManager.lastSyncAt > 4_000;
     const synced = forceSync || stale ? await runSync() : syncManager.lastMerged;
-    const [quota, hostTheme] = await Promise.all([
+    const [rawQuota, hostTheme] = await Promise.all([
       quotaClient.fetch(forceQuota).catch((err) => ({
         connected: false,
         groups: [],
@@ -168,12 +198,13 @@ export async function createDashboardService(options = {}) {
       })),
       readHostTheme(paths.pluginConfig),
     ]);
+    const { quota, cleanSynced } = applyForecastAndStrip(synced, rawQuota);
 
     return {
       revision,
       hostTheme,
       quota,
-      ...synced,
+      ...cleanSynced,
     };
   }
 
@@ -196,10 +227,11 @@ export async function createDashboardService(options = {}) {
         cb(updated.settings);
       } catch {}
     }
-    const [quota, hostTheme] = await Promise.all([
+    const [rawQuota, hostTheme] = await Promise.all([
       quotaClient.fetch(false).catch(() => ({ connected: false, groups: [], fetchedAt: Date.now() })),
       readHostTheme(paths.pluginConfig),
     ]);
+    const { quota, cleanSynced } = applyForecastAndStrip(updated.synced, rawQuota);
     return {
       settings: updated.settings,
       candidates: updated.candidates,
@@ -207,7 +239,7 @@ export async function createDashboardService(options = {}) {
         revision,
         hostTheme,
         quota,
-        ...updated.synced,
+        ...cleanSynced,
       },
     };
   }

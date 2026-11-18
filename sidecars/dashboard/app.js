@@ -22,6 +22,22 @@
       quotaWinWeekly: '周周期',
       quotaResetIn: (t) => `重置于 ${t}`,
       quotaDisabled: '不可用',
+      fcCurrUsed: (v) => `本周期 ${v}`,
+      fcPrevUsed: (v) => `上周期 ${v}`,
+      fcEstRem: (v) => `预计剩余 ~${v}`,
+      fcEstRemNone: '预计剩余 --',
+      fcRateBasis: {
+        'curr+prev': '当前+上周期',
+        curr: '当前周期',
+        prev: '上周期',
+        none: '无消耗',
+      },
+      fcRunwaySafe: (d) => `可用 ~${d}（可撑至重置）`,
+      fcRunwayRisk: (d) => `可用 ~${d}（重置前可能耗尽）`,
+      fcRunwayNeutral: (d) => `可用 ~${d}`,
+      fcRunwayDepleted: '已耗尽，等待重置',
+      fcRunwayInsufficient: '暂无足够消耗样本预测',
+      fcRateTip: (rate, basis) => `平均速率 ${rate}/h（依据：${basis}）`,
       totalsTitle: '多设备累计用量',
       todayLabel: '今日累计',
       allTimeLabel: '历史总计',
@@ -106,6 +122,22 @@
       quotaWinWeekly: 'Weekly',
       quotaResetIn: (t) => `Resets in ${t}`,
       quotaDisabled: 'Unavailable',
+      fcCurrUsed: (v) => `Curr ${v}`,
+      fcPrevUsed: (v) => `Prev ${v}`,
+      fcEstRem: (v) => `Est. left ~${v}`,
+      fcEstRemNone: 'Est. left --',
+      fcRateBasis: {
+        'curr+prev': 'curr+prev cycles',
+        curr: 'current cycle',
+        prev: 'previous cycle',
+        none: 'no usage',
+      },
+      fcRunwaySafe: (d) => `~${d} left (lasts past reset)`,
+      fcRunwayRisk: (d) => `~${d} left (may deplete early)`,
+      fcRunwayNeutral: (d) => `~${d} left`,
+      fcRunwayDepleted: 'Depleted until reset',
+      fcRunwayInsufficient: 'Not enough usage data to forecast',
+      fcRateTip: (rate, basis) => `Burn rate ${rate}/h (${basis})`,
       totalsTitle: 'Multi-Device Summed Usage',
       todayLabel: 'Today (All Devices)',
       allTimeLabel: 'All-Time Sum',
@@ -373,19 +405,29 @@
     return dict.daysAgo(Math.floor(hrs / 24));
   }
 
+  function fmtDurationMs(ms) {
+    if (ms === null || ms === undefined || !Number.isFinite(ms)) return '--';
+    const clamped = Math.max(0, ms);
+    const totalMins = Math.round(clamped / 60000);
+    if (totalMins < 1) return '< 1m';
+    const hrs = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    if (hrs >= 24 * 30) {
+      return '> 30d';
+    }
+    if (hrs >= 24) {
+      const days = Math.floor(hrs / 24);
+      const remH = hrs % 24;
+      return remH > 0 ? `${days}d ${remH}h` : `${days}d`;
+    }
+    return hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+  }
+
   function fmtCountdown(isoTime) {
     if (!isoTime) return '';
     const target = Date.parse(isoTime);
     if (!Number.isFinite(target)) return '';
-    const diff = Math.max(0, target - Date.now());
-    const mins = Math.floor(diff / 60000);
-    const hrs = Math.floor(mins / 60);
-    const remMins = mins % 60;
-    if (hrs >= 24) {
-      const days = Math.floor(hrs / 24);
-      return `${days}d ${hrs % 24}h`;
-    }
-    return hrs > 0 ? `${hrs}h ${remMins}m` : `${remMins}m`;
+    return fmtDurationMs(Math.max(0, target - Date.now()));
   }
 
   function quotaLevelClass(frac) {
@@ -545,7 +587,7 @@
           : win.resetTime
             ? dict.quotaResetIn(fmtCountdown(win.resetTime))
             : '';
-        const item = el('div', { className: 'quota-item' }, [
+        const itemChildren = [
           el('div', { className: 'quota-top' }, [
             el('span', { className: 'quota-name', text: `${grp.title} (${winLabel})` }),
             el('span', {
@@ -559,7 +601,63 @@
               style: { width: `${Math.round(frac * 100)}%` },
             }),
           ]),
-        ]);
+        ];
+
+        const fc = win.forecast;
+        if (fc) {
+          const currStr = dict.fcCurrUsed(fmtTokens(fc.currUsedTokens || 0));
+          const prevStr = dict.fcPrevUsed(fmtTokens(fc.prevUsedTokens || 0));
+          const remStr =
+            fc.estimatedRemainingTokens !== null && fc.estimatedRemainingTokens !== undefined
+              ? dict.fcEstRem(fmtTokens(fc.estimatedRemainingTokens))
+              : dict.fcEstRemNone;
+
+          let runwayText = dict.fcRunwayInsufficient;
+          let runwayClass = 'forecast-runway';
+          if (fc.status === 'depleted') {
+            runwayText = dict.fcRunwayDepleted;
+            runwayClass += ' danger';
+          } else if (fc.estimatedRunwayMs !== null && fc.estimatedRunwayMs !== undefined) {
+            const durText = fmtDurationMs(fc.estimatedRunwayMs);
+            if (fc.willLastUntilReset === true) {
+              runwayText = dict.fcRunwaySafe(durText);
+              runwayClass += ' ok';
+            } else if (fc.willLastUntilReset === false) {
+              runwayText = dict.fcRunwayRisk(durText);
+              runwayClass += ' warn';
+            } else {
+              runwayText = dict.fcRunwayNeutral(durText);
+            }
+          }
+
+          const basisLabel = dict.fcRateBasis[fc.rateSource || 'none'] || fc.rateSource;
+          const rateTip =
+            fc.burnRatePerHour > 0 ? dict.fcRateTip(fmtTokens(fc.burnRatePerHour), basisLabel) : '';
+
+          const fcBox = el(
+            'div',
+            { className: 'quota-forecast', ...(rateTip ? { title: rateTip } : {}) },
+            [
+              el('div', { className: 'forecast-metrics' }, [
+                el('span', { text: currStr }),
+                el('span', { text: prevStr }),
+                el('span', { text: remStr }),
+              ]),
+              el('div', { className: 'forecast-foot' }, [
+                el('span', { className: runwayClass, text: runwayText }),
+                fc.burnRatePerHour > 0
+                  ? el('span', {
+                      className: 'forecast-rate',
+                      text: `${fmtTokens(fc.burnRatePerHour)}/h · ${basisLabel}`,
+                    })
+                  : null,
+              ]),
+            ]
+          );
+          itemChildren.push(fcBox);
+        }
+
+        const item = el('div', { className: 'quota-item' }, itemChildren);
         list.appendChild(item);
       }
     }

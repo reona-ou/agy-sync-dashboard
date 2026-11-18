@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { SLOT_MS, TIMELINE_RETENTION_MS, classifyModelFamily } from './forecast.mjs';
 
 /**
  * Known model enum fallbacks when proto field g1[19] (modelId) is omitted.
@@ -512,6 +513,8 @@ export class LocalUsageCollector {
     const totals = emptyBucket();
     const byDate = Object.create(null);
     const byModel = Object.create(null);
+    const bySlot = Object.create(null);
+    const slotCutoffMs = Date.now() - TIMELINE_RETENTION_MS;
     let latestGen = null;
 
     for (const { gen, convId } of seen.values()) {
@@ -519,6 +522,19 @@ export class LocalUsageCollector {
 
       if (!byDate[gen.dateKey]) byDate[gen.dateKey] = emptyBucket();
       addToBucket(byDate[gen.dateKey], gen);
+
+      if (gen.timestampMs >= slotCutoffMs) {
+        const slotKey = String(Math.floor(gen.timestampMs / SLOT_MS));
+        const fam = classifyModelFamily(gen.modelId, gen.displayName);
+        if (!bySlot[slotKey]) bySlot[slotKey] = Object.create(null);
+        if (!bySlot[slotKey][fam]) {
+          bySlot[slotKey][fam] = { totalTokens: 0, nonCacheTokens: 0, generations: 0 };
+        }
+        const sb = bySlot[slotKey][fam];
+        sb.totalTokens += gen.totalTokens;
+        sb.nonCacheTokens += gen.inputTokens + gen.outputTokens;
+        sb.generations += 1;
+      }
 
       if (!byModel[gen.modelId]) {
         byModel[gen.modelId] = {
@@ -575,6 +591,7 @@ export class LocalUsageCollector {
         : null,
       byDate,
       byModel,
+      bySlot,
       recentConversations,
     };
 

@@ -5,6 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { toLocalDateKey } from '../sidecars/dashboard/collector.mjs';
+import {
+  SLOT_MS,
+  WINDOW_5H_MS,
+  WINDOW_7D_MS,
+  buildQuotaForecasts,
+  classifyModelFamily,
+} from '../sidecars/dashboard/forecast.mjs';
 import { createDashboardService, createStandaloneHttpServer } from '../sidecars/dashboard/main.mjs';
 import { normalizeQuotaSummary } from '../sidecars/dashboard/quota.mjs';
 import { SNAPSHOT_SCHEMA_VERSION, SyncManager, mergeDeviceSnapshots } from '../sidecars/dashboard/sync.mjs';
@@ -486,4 +493,101 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
     await new Promise((r) => davServer.close(r));
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }
+});
+
+test('buildQuotaForecasts computes current/previous cycle tokens, remaining estimate, and combined runway', () => {
+  assert.equal(classifyModelFamily('gemini-4-hydrogen', 'Gemini 4 Hydrogen'), 'gemini');
+  assert.equal(classifyModelFamily('claude-sonnet-4.6', ''), 'claude_gpt');
+  assert.equal(classifyModelFamily('gpt-oss-120b', ''), 'claude_gpt');
+  assert.equal(classifyModelFamily('gemini-4-argon', ''), 'argon');
+
+  // Align cleanly on 15-minute slot boundary
+  const nowMs = Math.floor(Date.now() / SLOT_MS) * SLOT_MS;
+  const reset5hMs = nowMs + 3 * 3600_000; // elapsed = 2h, left = 3h
+  const start5hMs = reset5hMs - WINDOW_5H_MS;
+  const prev5hSlot = String(Math.floor((start5hMs - 3600_000) / SLOT_MS));
+  const curr5hSlot = String(Math.floor((nowMs - 3600_000) / SLOT_MS));
+
+  const dev1 = {
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+    deviceId: 'dev-1',
+    deviceName: 'PC',
+    updatedAt: nowMs,
+    local: {
+      collectedAt: nowMs,
+      conversationCount: 1,
+      totals: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 8800, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 10000, generations: 5 },
+      byDate: {},
+      byModel: {},
+      bySlot: {
+        [prev5hSlot]: { gemini: { totalTokens: 100_000, nonCacheTokens: 10_000, generations: 2 } },
+        [curr5hSlot]: { gemini: { totalTokens: 60_000, nonCacheTokens: 6_000, generations: 3 } },
+      },
+      recentConversations: [],
+    },
+  };
+
+  const merged = mergeDeviceSnapshots([dev1], 'dev-1', nowMs);
+  const quota = {
+    connected: true,
+    accountHash: 'acc-1',
+    groups: [
+      {
+        id: 'gemini',
+        family: 'gemini',
+        title: 'Gemini Models',
+        windows: [
+          {
+            kind: '5h',
+            windowId: 'gemini-5h',
+            remainingFraction: 0.7, // 30% used => implied capacity = 60k / 0.3 = 200k => remaining = 140k
+            resetTime: new Date(reset5hMs).toISOString(),
+            disabled: false,
+          },
+        ],
+      },
+      {
+        id: 'claude_gpt',
+        family: 'claude_gpt',
+        title: 'Claude and GPT models',
+        windows: [
+          {
+            kind: 'weekly',
+            windowId: '3p-weekly',
+            remainingFraction: 1, // 100%, uses calibration fallback
+            resetTime: new Date(nowMs + WINDOW_7D_MS - 3600_000).toISOString(),
+            disabled: false,
+          },
+        ],
+      },
+    ],
+  };
+
+  const calibration = {
+    'acc-1:claude_gpt:weekly': { capacityTokens: 500_000, updatedAt: nowMs - 86400_000 },
+  };
+
+  const { quota: enriched, calibrationUpdates } = buildQuotaForecasts({
+    quota,
+    merged,
+    calibration,
+    nowMs,
+  });
+
+  const fc5h = enriched.groups[0].windows[0].forecast;
+  assert.equal(fc5h.currUsedTokens, 60_000);
+  assert.equal(fc5h.prevUsedTokens, 100_000);
+  assert.equal(fc5h.estimatedCapacityTokens, 200_000);
+  assert.equal(fc5h.estimatedRemainingTokens, 140_000);
+  assert.equal(fc5h.rateSource, 'curr+prev');
+  // Combined rate = (60k + 100k) / (2h + 5h) = 160k / 7h ~= 22857 tok/h
+  assert.equal(fc5h.burnRatePerHour, Math.round(160_000 / 7));
+  // Runway = 140k / (160k / 7h) = 6.125h > 3h left => lasts until reset
+  assert.equal(fc5h.willLastUntilReset, true);
+  assert.equal(fc5h.status, 'ok');
+  assert.equal(calibrationUpdates['acc-1:gemini:5h'].capacityTokens, 200_000);
+
+  const fc7d = enriched.groups[1].windows[0].forecast;
+  assert.equal(fc7d.estimatedRemainingTokens, 500_000);
+  assert.equal(fc7d.capacitySource, 'calibrated');
 });
