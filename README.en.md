@@ -188,3 +188,9 @@ conda env remove -n agy_sync_dashboard -y
    Syncthing creates `*sync-conflict*.json` if two devices somehow wrote the same file concurrently. The plugin ignores conflict files automatically; delete the extra `*sync-conflict*` file inside `<syncDir>/devices/`.
 3. **Does renaming my device create duplicate device entries?**  
    No. `deviceId` is persisted in `device.json`. Changing the display name updates the existing device record without creating a duplicate.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).

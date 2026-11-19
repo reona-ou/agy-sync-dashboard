@@ -192,3 +192,9 @@ conda env remove -n agy_sync_dashboard -y
    Syncthing 若在双端同时修改异常文件可能生成 `*sync-conflict*.json`。插件已自动忽略它们，只需到 `<syncDir>/devices/` 中删除带 `sync-conflict` 字样的副本文件即可。
 3. **本机重命名电脑后会不会重复统计？**  
    同一台设备的 `deviceId` 持久化保存在 `device.json` 中，修改“本机显示名称”不会新建设备；只有重装系统生成了新 `deviceId` 时才需要在同步目录手动清理旧设备的 `.json` 文件。
+
+---
+
+## 开源协议
+
+本项目基于 [MIT License](LICENSE) 开源。

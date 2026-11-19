@@ -188,3 +188,9 @@ conda env remove -n agy_sync_dashboard -y
    Syncthing で同一ファイルが同時に変更された場合に `*sync-conflict*.json` が生成されることがあります。プラグイン側で自動的に除外していますが、`<syncDir>/devices/` 内の不要な競合ファイルを削除することをおすすめします。
 3. **端末の表示名を変更すると重複カウントされますか？**  
    いいえ。`deviceId` は `device.json` に永続保存されているため、表示名を変更しても同一端末として扱われます。
+
+---
+
+## ライセンス
+
+本プロジェクトは [MIT License](LICENSE) のもとで公開されています。
