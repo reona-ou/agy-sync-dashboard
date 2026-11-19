@@ -142,8 +142,133 @@ export function normalizeQuotaSummary(response) {
   return groups;
 }
 
+function parseIsoMs(val) {
+  if (!val) return 0;
+  const ms = Date.parse(val);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 /**
- * Fetch current account identity (hashed + masked) and real-time quota pools via local RPC.
+ * Normalize `GetAllCascadeTrajectories` RPC payload into a flat summary list.
+ */
+export function normalizeTrajectorySummaries(response) {
+  const summaries = response?.trajectorySummaries;
+  if (!summaries || typeof summaries !== 'object') return [];
+  const out = [];
+  for (const [conversationId, item] of Object.entries(summaries)) {
+    if (!item || typeof item !== 'object') continue;
+    const status = String(item.status || '');
+    const lastModifiedMs = parseIsoMs(item.lastModifiedTime);
+    const lastUserViewMs = parseIsoMs(item.annotations?.lastUserViewTime);
+    const rootConversationId = String(item.trajectoryMetadata?.rootConversationId || conversationId);
+    out.push({
+      conversationId,
+      title: String(item.annotations?.title || item.summary || conversationId.slice(0, 8)),
+      status,
+      isRunning: status === 'CASCADE_RUN_STATUS_RUNNING',
+      stepCount: Number(item.stepCount || 0),
+      lastModifiedMs,
+      lastUserViewMs,
+      rootConversationId,
+    });
+  }
+  return out;
+}
+
+/**
+ * Extract latest context-window usage & max limit from `GetCascadeTrajectoryGeneratorMetadata` RPC JSON.
+ */
+export function parseRpcGeneratorContext(response) {
+  const list = response?.generatorMetadata;
+  if (!Array.isArray(list) || !list.length) return null;
+
+  let latestEntry = null;
+  let latestUsageEntry = null;
+  let fallbackMaxContext = 0;
+
+  const readEntry = (gm) => {
+    const cm = gm?.chatModel;
+    if (!cm || typeof cm !== 'object') return null;
+    const usage = cm.usage || {};
+    const inputTokens = Number(usage.inputTokens || 0);
+    const cacheReadTokens = Number(usage.cacheReadTokens || 0);
+    const cacheWriteTokens = Number(usage.cacheWriteTokens || 0);
+    const thinkingTokens = Number(usage.thinkingOutputTokens || 0);
+    const responseTokens = Number(usage.responseOutputTokens || 0);
+    const rawOutputTokens = Number(usage.outputTokens || 0);
+    const outputTokens = rawOutputTokens > 0 ? rawOutputTokens : responseTokens + thinkingTokens;
+    const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+    const nonThinkingOutput = responseTokens > 0 ? responseTokens : Math.max(0, outputTokens - thinkingTokens);
+    const ctxWin = cm.chatStartMetadata?.contextWindowMetadata || {};
+    const estimatedTokensUsed = Number(ctxWin.estimatedTokensUsed || 0);
+    const maxContextTokens = Number(ctxWin.maxContextTokens || 0);
+    const modelId = String(cm.responseModel || cm.model || '').trim() || 'unknown';
+    const displayName = String(cm.modelDisplayName || modelId);
+    return {
+      modelId,
+      displayName,
+      inputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      outputTokens,
+      promptTokens,
+      nonThinkingOutput,
+      estimatedTokensUsed,
+      maxContextTokens,
+    };
+  };
+
+  for (let i = list.length - 1; i >= 0; i--) {
+    const parsed = readEntry(list[i]);
+    if (!parsed) continue;
+    if (!latestEntry) latestEntry = parsed;
+    if (!fallbackMaxContext && parsed.maxContextTokens > 0) {
+      fallbackMaxContext = parsed.maxContextTokens;
+    }
+    if (!latestUsageEntry && parsed.promptTokens > 0) {
+      latestUsageEntry = parsed;
+    }
+    if (latestEntry && latestUsageEntry && fallbackMaxContext > 0) break;
+  }
+
+  const chosen = latestEntry?.promptTokens > 0
+    ? latestEntry
+    : latestEntry?.estimatedTokensUsed > 0
+      ? latestEntry
+      : latestUsageEntry || latestEntry;
+  if (!chosen) return null;
+
+  const maxContextTokens = chosen.maxContextTokens || fallbackMaxContext || 0;
+  let usedTokens = 0;
+  let source = 'empty';
+  if (chosen.promptTokens > 0) {
+    usedTokens = chosen.promptTokens + chosen.nonThinkingOutput;
+    source = 'usage';
+  } else if (chosen.estimatedTokensUsed > 0) {
+    usedTokens = chosen.estimatedTokensUsed;
+    source = 'estimate';
+  }
+
+  return {
+    modelId: chosen.modelId,
+    displayName: chosen.displayName,
+    usedTokens,
+    maxContextTokens,
+    promptTokens: chosen.promptTokens,
+    inputTokens: chosen.inputTokens,
+    cacheReadTokens: chosen.cacheReadTokens,
+    cacheWriteTokens: chosen.cacheWriteTokens,
+    outputTokens: chosen.outputTokens,
+    responseTokens: chosen.nonThinkingOutput,
+    estimatedTokensUsed: chosen.estimatedTokensUsed,
+    source,
+    timestampMs: Date.now(),
+  };
+}
+
+/**
+ * Fetch current account identity (hashed + masked), real-time quota pools,
+ * and active cascade trajectories via local RPC.
  */
 export class QuotaClient {
   constructor(paths = null) {
@@ -151,6 +276,20 @@ export class QuotaClient {
     this.endpoint = null;
     this.lastResult = null;
     this.lastFetchedAt = 0;
+    this.lastTrajectories = null;
+    this.lastTrajectoriesAt = 0;
+  }
+
+  async callWithEndpointRetry(method, body = {}) {
+    if (!this.endpoint) {
+      this.endpoint = await discoverLanguageServer(this.paths || undefined);
+    }
+    try {
+      return await callLocalRpc(this.endpoint, method, body);
+    } catch {
+      this.endpoint = await discoverLanguageServer(this.paths || undefined);
+      return await callLocalRpc(this.endpoint, method, body);
+    }
   }
 
   async fetch(force = false) {
@@ -159,16 +298,7 @@ export class QuotaClient {
     }
 
     try {
-      if (!this.endpoint) {
-        this.endpoint = await discoverLanguageServer(this.paths || undefined);
-      }
-      let userResp;
-      try {
-        userResp = await callLocalRpc(this.endpoint, 'GetUserStatus', {});
-      } catch {
-        this.endpoint = await discoverLanguageServer(this.paths || undefined);
-        userResp = await callLocalRpc(this.endpoint, 'GetUserStatus', {});
-      }
+      const userResp = await this.callWithEndpointRetry('GetUserStatus', {});
 
       const email = String(userResp?.userStatus?.email || '').trim().toLowerCase();
       const accountHash = email
@@ -208,6 +338,40 @@ export class QuotaClient {
         fetchedAt: this.lastResult?.fetchedAt || null,
         error: err instanceof Error ? err.message : String(err),
       };
+    }
+  }
+
+  async fetchTrajectories(force = false) {
+    if (!force && this.lastTrajectories && Date.now() - this.lastTrajectoriesAt < 2_500) {
+      return this.lastTrajectories;
+    }
+    try {
+      const resp = await this.callWithEndpointRetry('GetAllCascadeTrajectories', {});
+      this.lastTrajectories = {
+        connected: true,
+        trajectories: normalizeTrajectorySummaries(resp),
+        fetchedAt: Date.now(),
+        error: null,
+      };
+      this.lastTrajectoriesAt = Date.now();
+      return this.lastTrajectories;
+    } catch (err) {
+      return {
+        connected: false,
+        trajectories: this.lastTrajectories?.trajectories || [],
+        fetchedAt: this.lastTrajectories?.fetchedAt || 0,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  async fetchTrajectoryContext(cascadeId) {
+    if (!cascadeId) return null;
+    try {
+      const resp = await this.callWithEndpointRetry('GetCascadeTrajectoryGeneratorMetadata', { cascadeId });
+      return parseRpcGeneratorContext(resp);
+    } catch {
+      return null;
     }
   }
 }

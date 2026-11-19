@@ -7,6 +7,7 @@
 ## 核心特性
 
 - **原生侧边栏集成**：遵循 Antigravity 插件与 Sidecar 规范（`SIDECAR_UI_ENTRYPOINT_AUX_PANE`），**不修改** `app.asar`，不注入编辑器 DOM。
+- **当前对话上下文监控**：实时读取当前活跃会话的上下文窗口上限（`maxContextTokens`）与当前已用上下文（优先采用 API 实测 `promptTokens + responseTokens`，流式阶段回退本地预估值），支持自动跟随活跃会话或手动切换查看近期本地会话，并分级提示剩余容量。
 - **信息层级重设计（纯 CSS、零依赖、零构建）**：页面 / 卡片 / 内嵌三层表面令牌与语义状态色，不新增任何 DOM 节点；14 天趋势改用平方根刻度（避免单日峰值把其余柱条压成 2px）并绘制峰值 / 中位参考线，柱条可键盘聚焦；配额离线与空数据统一为虚线空状态；文本对比度经浏览器取样验证满足 WCAG AA（≥4.5:1），支持 `prefers-reduced-motion` 与 ≤380px 窄面板自适应。
 - **彻底独立的 Conda 环境**：提供最小化 `environment.yml`（环境名 `agy_sync_dashboard`，仅包含独立 Python 3.10+ 标准库环境，不污染系统或现有软件环境）；`install.ps1`、`install.sh` 与 `manage.py` 均支持自动创建并切换至该独立环境运行。
 - **中 / 英 / 日三语界面（`zh-CN` / `en` / `ja`）**：前后端、配置项及系统文件夹选择器均完整支持简体中文、English、日本語，可在 **设置** 页即时切换并持久化保存。

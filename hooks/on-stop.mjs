@@ -4,25 +4,39 @@ import { readJsonSafe, resolvePaths } from '../compat/platform.mjs';
 
 const MIN_INTERVAL_MS = 2500;
 
-async function drainStdinBriefly() {
-  if (process.stdin.isTTY) return;
-  await new Promise((resolve) => {
+async function readHookStdinBriefly() {
+  if (process.stdin.isTTY) return null;
+  return new Promise((resolve) => {
+    let raw = '';
+    let settled = false;
     const done = () => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       process.stdin.pause();
       try {
         process.stdin.unref();
       } catch {}
-      resolve();
+      try {
+        const trimmed = raw.trim();
+        resolve(trimmed ? JSON.parse(trimmed) : null);
+      } catch {
+        resolve(null);
+      }
     };
     const timer = setTimeout(done, 80);
-    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      if (raw.length < 65536) raw += chunk;
+      if (raw.length >= 65536) done();
+    });
     process.stdin.once('end', done);
     process.stdin.once('error', done);
+    process.stdin.resume();
   });
 }
 
-async function pingRunningSidecar(runtimeFile) {
+async function pingRunningSidecar(runtimeFile, sessionMeta = null) {
   const runtime = readJsonSafe(runtimeFile, null);
   const port = Number(runtime?.port || 0);
   if (!port || port <= 0) return false;
@@ -36,7 +50,11 @@ async function pingRunningSidecar(runtimeFile) {
         'content-type': 'application/json',
         ...(runtime?.token ? { 'x-agy-sync-token': runtime.token } : {}),
       },
-      body: JSON.stringify({ source: 'hook' }),
+      body: JSON.stringify({
+        source: 'hook',
+        ...(sessionMeta?.conversationId ? { conversationId: sessionMeta.conversationId } : {}),
+        ...(sessionMeta?.modelName ? { modelName: sessionMeta.modelName } : {}),
+      }),
       signal: ctrl.signal,
     });
     return res.ok;
@@ -48,10 +66,24 @@ async function pingRunningSidecar(runtimeFile) {
 }
 
 async function main() {
-  await drainStdinBriefly();
+  const hookInput = await readHookStdinBriefly();
 
   const paths = resolvePaths();
   await fsp.mkdir(paths.pluginDataDir, { recursive: true });
+
+  const sessionMeta = hookInput?.conversationId
+    ? {
+        conversationId: String(hookInput.conversationId),
+        modelName: String(hookInput.modelName || ''),
+        hookEventName: String(hookInput.hookEventName || 'Stop'),
+        updatedAt: Date.now(),
+      }
+    : null;
+
+  if (sessionMeta) {
+    const activeSessionFile = path.join(paths.pluginDataDir, 'active-session.json');
+    await fsp.writeFile(activeSessionFile, JSON.stringify(sessionMeta) + '\n', 'utf8').catch(() => {});
+  }
 
   const stampFile = path.join(paths.pluginDataDir, 'hook-last-run.json');
   const lastRun = readJsonSafe(stampFile, null);
@@ -62,7 +94,7 @@ async function main() {
   await fsp.writeFile(stampFile, JSON.stringify({ at: Date.now() }) + '\n', 'utf8');
 
   const runtimeFile = path.join(paths.pluginDataDir, 'sidecar-runtime.json');
-  const pinged = await pingRunningSidecar(runtimeFile);
+  const pinged = await pingRunningSidecar(runtimeFile, sessionMeta);
   if (pinged) return;
 
   // Fallback when sidecar UI has not been launched yet: run direct snapshot sync.

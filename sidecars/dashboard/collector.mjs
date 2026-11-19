@@ -188,6 +188,85 @@ export function resolveModelMeta(modelId, displayName, modelEnum) {
 }
 
 /**
+ * Decode `chatStartMetadata.contextWindowMetadata` (g1[9][10]) for context usage & limit.
+ */
+export function parseContextWindowMetadata(g1Fields) {
+  const chatStartRaw = getFirstBytes(g1Fields, 9);
+  if (!chatStartRaw) return { estimatedTokensUsed: 0, maxContextTokens: 0 };
+  const chatStart = decodeProtobufFields(chatStartRaw);
+  const ctxWinRaw = getFirstBytes(chatStart, 10);
+  if (!ctxWinRaw) return { estimatedTokensUsed: 0, maxContextTokens: 0 };
+  const ctxWin = decodeProtobufFields(ctxWinRaw);
+  return {
+    estimatedTokensUsed: getFirstVarint(ctxWin, 1, 0),
+    maxContextTokens: getFirstVarint(ctxWin, 4, 0),
+  };
+}
+
+/**
+ * Decode context-window state from a `gen_metadata.data` blob (works even if usage is not yet populated).
+ * @returns {object | null}
+ */
+export function parseGenContextSnapshot(blob) {
+  if (!blob?.length) return null;
+  const top = decodeProtobufFields(blob);
+  const g1Raw = getFirstBytes(top, 1);
+  if (!g1Raw) return null;
+
+  const g1 = decodeProtobufFields(g1Raw);
+  const stepIndices = decodePackedVarints(top.get(2));
+  const modelEnum = getFirstVarint(g1, 3, 0);
+  const { modelId, displayName } = resolveModelMeta(
+    getFirstString(g1, 19),
+    getFirstString(g1, 21),
+    modelEnum
+  );
+  const { estimatedTokensUsed, maxContextTokens } = parseContextWindowMetadata(g1);
+
+  const usageRaw = getFirstBytes(g1, 4);
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheWriteTokens = 0;
+  let cacheReadTokens = 0;
+  let thinkingTokens = 0;
+  let responseTokens = 0;
+
+  if (usageRaw) {
+    const usage = decodeProtobufFields(usageRaw);
+    inputTokens = getFirstVarint(usage, 2, 0);
+    const rawOutputTokens = getFirstVarint(usage, 3, 0);
+    cacheWriteTokens = getFirstVarint(usage, 4, 0);
+    cacheReadTokens = getFirstVarint(usage, 5, 0);
+    thinkingTokens = getFirstVarint(usage, 9, 0);
+    responseTokens = getFirstVarint(usage, 10, 0);
+    outputTokens =
+      rawOutputTokens > 0
+        ? rawOutputTokens
+        : responseTokens + thinkingTokens;
+  }
+
+  const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+  const nonThinkingOutput = responseTokens > 0 ? responseTokens : Math.max(0, outputTokens - thinkingTokens);
+
+  return {
+    stepIndices,
+    modelEnum,
+    modelId,
+    displayName,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    thinkingTokens,
+    responseTokens,
+    promptTokens,
+    nonThinkingOutput,
+    estimatedTokensUsed,
+    maxContextTokens,
+  };
+}
+
+/**
  * Decode a single `gen_metadata.data` protobuf blob.
  * @returns {object | null}
  */
@@ -227,6 +306,7 @@ export function parseGenMetadataBlob(blob) {
     getFirstString(g1, 21),
     modelEnum
   );
+  const { estimatedTokensUsed, maxContextTokens } = parseContextWindowMetadata(g1);
 
   return {
     stepIndices,
@@ -243,6 +323,8 @@ export function parseGenMetadataBlob(blob) {
     thinkingTokens,
     responseTokens,
     totalTokens,
+    estimatedTokensUsed,
+    maxContextTokens,
     ttftMs,
     streamingMs,
   };
@@ -282,9 +364,82 @@ function addToBucket(bucket, item) {
   bucket.generations += 1;
 }
 
+function resolveStepTimestamp(stepIndices, stepTimeMap, fallbackMs) {
+  let timestampMs = 0;
+  let streamWallMs = 0;
+  for (const stepIdx of stepIndices || []) {
+    const meta = stepTimeMap.get(stepIdx);
+    if (meta) {
+      timestampMs = meta.completedAtMs || meta.createdAtMs || meta.firstChunkAtMs || timestampMs;
+      if (meta.completedAtMs > 0 && meta.completedAtMs > meta.firstChunkAtMs) {
+        streamWallMs = meta.completedAtMs - meta.firstChunkAtMs;
+      }
+      if (timestampMs > 0) break;
+    }
+  }
+  return { timestampMs: timestampMs || fallbackMs, streamWallMs };
+}
+
+function buildContextFromRows(genRows, stepTimeMap, fallbackMs) {
+  if (!genRows?.length) return null;
+
+  let latestParsed = null;
+  let latestUsageParsed = null;
+  let fallbackMaxContext = 0;
+
+  for (let i = genRows.length - 1; i >= 0; i--) {
+    const ctx = parseGenContextSnapshot(genRows[i].data);
+    if (!ctx) continue;
+    if (!latestParsed) latestParsed = ctx;
+    if (!fallbackMaxContext && ctx.maxContextTokens > 0) {
+      fallbackMaxContext = ctx.maxContextTokens;
+    }
+    if (!latestUsageParsed && ctx.promptTokens > 0) {
+      latestUsageParsed = ctx;
+    }
+    if (latestParsed && latestUsageParsed && fallbackMaxContext > 0) break;
+  }
+
+  const chosen = latestParsed?.promptTokens > 0
+    ? latestParsed
+    : latestParsed?.estimatedTokensUsed > 0
+      ? latestParsed
+      : latestUsageParsed || latestParsed;
+  if (!chosen) return null;
+
+  const maxContextTokens = chosen.maxContextTokens || fallbackMaxContext || 0;
+  const { timestampMs } = resolveStepTimestamp(chosen.stepIndices, stepTimeMap, fallbackMs);
+
+  let usedTokens = 0;
+  let source = 'empty';
+  if (chosen.promptTokens > 0) {
+    usedTokens = chosen.promptTokens + chosen.nonThinkingOutput;
+    source = 'usage';
+  } else if (chosen.estimatedTokensUsed > 0) {
+    usedTokens = chosen.estimatedTokensUsed;
+    source = 'estimate';
+  }
+
+  return {
+    modelId: chosen.modelId,
+    displayName: chosen.displayName,
+    usedTokens,
+    maxContextTokens,
+    promptTokens: chosen.promptTokens,
+    inputTokens: chosen.inputTokens,
+    cacheReadTokens: chosen.cacheReadTokens,
+    cacheWriteTokens: chosen.cacheWriteTokens,
+    outputTokens: chosen.outputTokens,
+    responseTokens: chosen.nonThinkingOutput,
+    estimatedTokensUsed: chosen.estimatedTokensUsed,
+    source,
+    timestampMs,
+  };
+}
+
 /**
  * Scan one Antigravity conversation SQLite file using read-only mode.
- * Returns raw generation events plus conversation aggregate counters.
+ * Returns raw generation events plus conversation aggregate counters and context state.
  */
 export function scanConversationDb(dbPath, summaryMeta = null) {
   const convId = path.basename(dbPath, '.db');
@@ -296,12 +451,21 @@ export function scanConversationDb(dbPath, summaryMeta = null) {
         .all()
         .map((r) => r.name)
     );
+    let fallbackMs = summaryMeta?.lastModifiedMs || 0;
+    if (!fallbackMs) {
+      try {
+        fallbackMs = Math.floor(fs.statSync(dbPath).mtimeMs);
+      } catch {
+        fallbackMs = Date.now();
+      }
+    }
     if (!tables.has('gen_metadata')) {
       return {
         convId,
         title: summaryMeta?.title || convId.slice(0, 8),
-        lastModifiedMs: summaryMeta?.lastModifiedMs || 0,
+        lastModifiedMs: fallbackMs,
         generations: [],
+        contextInfo: null,
       };
     }
 
@@ -323,35 +487,12 @@ export function scanConversationDb(dbPath, summaryMeta = null) {
       .prepare('SELECT idx, data FROM gen_metadata ORDER BY idx ASC')
       .all();
 
-    let fallbackMs = summaryMeta?.lastModifiedMs || 0;
-    if (!fallbackMs) {
-      try {
-        fallbackMs = Math.floor(fs.statSync(dbPath).mtimeMs);
-      } catch {
-        fallbackMs = Date.now();
-      }
-    }
-
     const generations = [];
     for (const row of genRows) {
       const parsed = parseGenMetadataBlob(row.data);
       if (!parsed || parsed.totalTokens <= 0) continue;
 
-      let timestampMs = 0;
-      let streamWallMs = 0;
-      for (const stepIdx of parsed.stepIndices) {
-        const meta = stepTimeMap.get(stepIdx);
-        if (meta) {
-          timestampMs = meta.completedAtMs || meta.createdAtMs || meta.firstChunkAtMs || timestampMs;
-          if (meta.completedAtMs > 0 && meta.firstChunkAtMs > meta.completedAtMs === false && meta.completedAtMs > meta.firstChunkAtMs) {
-            streamWallMs = meta.completedAtMs - meta.firstChunkAtMs;
-          }
-          if (timestampMs > 0) break;
-        }
-      }
-      if (!timestampMs) {
-        timestampMs = fallbackMs;
-      }
+      const { timestampMs, streamWallMs } = resolveStepTimestamp(parsed.stepIndices, stepTimeMap, fallbackMs);
 
       const genDurationMs =
         parsed.streamingMs > parsed.ttftMs && parsed.streamingMs > 0
@@ -384,11 +525,14 @@ export function scanConversationDb(dbPath, summaryMeta = null) {
       });
     }
 
+    const contextInfo = buildContextFromRows(genRows, stepTimeMap, fallbackMs);
+
     return {
       convId,
       title: summaryMeta?.title || convId.slice(0, 8),
-      lastModifiedMs: fallbackMs,
+      lastModifiedMs: contextInfo?.timestampMs && contextInfo.timestampMs > fallbackMs ? contextInfo.timestampMs : fallbackMs,
       generations,
+      contextInfo,
     };
   } finally {
     db.close();
@@ -434,6 +578,7 @@ export class LocalUsageCollector {
   constructor(paths) {
     this.paths = paths;
     this.fileCache = new Map();
+    this.conversationContexts = new Map();
     this.lastSnapshot = null;
   }
 
@@ -445,6 +590,59 @@ export class LocalUsageCollector {
       walSig = `${Math.floor(wst.mtimeMs)}:${wst.size}`;
     } catch {}
     return `${Math.floor(st.mtimeMs)}:${st.size}|${walSig}`;
+  }
+
+  async getConversationContext(convId) {
+    if (!convId || typeof convId !== 'string') return null;
+    const cleanId = path.basename(convId.trim());
+    if (!cleanId || cleanId !== convId.trim() || cleanId.includes('..')) return null;
+
+    const convDir = this.paths.conversationsDir;
+    if (convDir) {
+      const dbPath = path.join(convDir, `${cleanId}.db`);
+      if (fs.existsSync(dbPath)) {
+        try {
+          const sig = await this.fileSignature(dbPath);
+          const cached = this.fileCache.get(dbPath);
+          if (cached && cached.sig === sig && 'contextInfo' in cached.data) {
+            const entry = {
+              conversationId: cached.data.convId,
+              title: cached.data.title,
+              lastModifiedMs: cached.data.lastModifiedMs,
+              contextInfo: cached.data.contextInfo || null,
+            };
+            this.conversationContexts.set(cleanId, entry);
+            return entry;
+          }
+          const summaries = loadConversationSummaries(this.paths.summariesDb);
+          const summaryMeta = summaries.get(cleanId) || null;
+          const scanned = scanConversationDb(dbPath, summaryMeta);
+          this.fileCache.set(dbPath, {
+            sig,
+            title: scanned.title,
+            data: scanned,
+          });
+          const entry = {
+            conversationId: scanned.convId,
+            title: scanned.title,
+            lastModifiedMs: scanned.lastModifiedMs,
+            contextInfo: scanned.contextInfo || null,
+          };
+          this.conversationContexts.set(cleanId, entry);
+          return entry;
+        } catch {
+          // Fall back to previously cached context entry if DB is transiently locked.
+        }
+      }
+    }
+
+    return this.conversationContexts.get(cleanId) || null;
+  }
+
+  listConversationContexts(limit = 15) {
+    return Array.from(this.conversationContexts.values())
+      .sort((a, b) => Number(b.lastModifiedMs || 0) - Number(a.lastModifiedMs || 0))
+      .slice(0, limit);
   }
 
   async collect() {
@@ -469,7 +667,12 @@ export class LocalUsageCollector {
       try {
         const sig = await this.fileSignature(fullPath);
         const cached = this.fileCache.get(fullPath);
-        if (cached && cached.sig === sig && cached.title === (summaryMeta?.title || cached.title)) {
+        if (
+          cached &&
+          cached.sig === sig &&
+          cached.title === (summaryMeta?.title || cached.title) &&
+          'contextInfo' in cached.data
+        ) {
           convResults.push(cached.data);
           continue;
         }
@@ -492,6 +695,7 @@ export class LocalUsageCollector {
     // Deduplicate across all files on the same device using responseId / messageId / convId:genIdx.
     const seen = new Map();
     const convBuckets = new Map();
+    const nextContexts = new Map();
 
     for (const conv of convResults) {
       convBuckets.set(conv.convId, {
@@ -499,6 +703,12 @@ export class LocalUsageCollector {
         title: conv.title,
         lastModifiedMs: conv.lastModifiedMs,
         ...emptyBucket(),
+      });
+      nextContexts.set(conv.convId, {
+        conversationId: conv.convId,
+        title: conv.title,
+        lastModifiedMs: conv.lastModifiedMs,
+        contextInfo: conv.contextInfo || null,
       });
 
       for (const gen of conv.generations) {
@@ -509,6 +719,7 @@ export class LocalUsageCollector {
         }
       }
     }
+    this.conversationContexts = nextContexts;
 
     const totals = emptyBucket();
     const byDate = Object.create(null);

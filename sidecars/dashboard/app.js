@@ -103,6 +103,16 @@
       diagSnapshot: '本机快照',
       diagLastSync: '最近同步',
       diagSyncError: '同步错误',
+      ctxTitle: '当前对话上下文',
+      ctxAutoOption: '自动跟随当前会话',
+      ctxSelectAria: '选择要查看上下文的会话',
+      ctxRemainLabel: '剩余',
+      ctxEstLabel: (v) => `预估 ${v}`,
+      ctxSourceExact: 'API 实测',
+      ctxSourceEst: '本地预估',
+      ctxRunning: '生成中',
+      ctxPending: '当前会话尚未产生模型调用，发送消息后将显示上下文占用。',
+      ctxEmpty: '暂未检测到本地对话记录。',
       inTok: '输入',
       outTok: '输出',
       cacheTok: '缓存命中',
@@ -212,6 +222,16 @@
       diagSnapshot: 'Local snapshot',
       diagLastSync: 'Last sync',
       diagSyncError: 'Sync error',
+      ctxTitle: 'Current Session Context',
+      ctxAutoOption: 'Auto-follow active session',
+      ctxSelectAria: 'Select conversation for context view',
+      ctxRemainLabel: 'Left',
+      ctxEstLabel: (v) => `Est. ${v}`,
+      ctxSourceExact: 'Measured',
+      ctxSourceEst: 'Estimated',
+      ctxRunning: 'Running',
+      ctxPending: 'No model turns in this session yet. Send a message to see context usage.',
+      ctxEmpty: 'No local conversations found yet.',
       inTok: 'In',
       outTok: 'Out',
       cacheTok: 'Cache',
@@ -321,6 +341,16 @@
       diagSnapshot: 'ローカルスナップショット',
       diagLastSync: '最終同期',
       diagSyncError: '同期エラー',
+      ctxTitle: '現在の会話コンテキスト',
+      ctxAutoOption: 'アクティブ会話を自動追従',
+      ctxSelectAria: 'コンテキストを表示する会話を選択',
+      ctxRemainLabel: '残り',
+      ctxEstLabel: (v) => `推定 ${v}`,
+      ctxSourceExact: '実測値',
+      ctxSourceEst: '推定値',
+      ctxRunning: '生成中',
+      ctxPending: 'この会話ではまだモデル呼び出しがありません。メッセージ送信後に表示されます。',
+      ctxEmpty: 'ローカルの会話履歴がまだ見つかりません。',
       inTok: '入力',
       outTok: '出力',
       cacheTok: 'キャッシュ',
@@ -340,6 +370,7 @@
     lang: 'zh-CN',
     dashboard: null,
     selectedDateKey: null,
+    selectedConvId: 'auto',
     syncing: false,
     settingsDirty: false,
     selectedSyncMode: 'folder',
@@ -347,6 +378,7 @@
     hostThemeHint: null,
     lastThemeSig: '',
     lastRevision: null,
+    lastContextSig: '',
     versionEndpointSupported: true,
     refreshIntervalMs: 30000,
     lastDashboardFetchAt: 0,
@@ -701,6 +733,124 @@
     }
   }
 
+  function contextLevelClass(usedRatio) {
+    if (usedRatio >= 0.85) return 'danger';
+    if (usedRatio >= 0.65) return 'warn';
+    return 'ok';
+  }
+
+  function buildContextCard(sessionContext) {
+    const dict = t();
+    const card = el('article', { className: 'card' });
+    const current = sessionContext?.current || null;
+    const conversations = sessionContext?.conversations || [];
+
+    const rightTagText = current?.displayName || current?.modelId || (current?.isRunning ? dict.ctxRunning : '');
+    const headChildren = [el('h2', { className: 'card-title', text: dict.ctxTitle })];
+    if (rightTagText) {
+      headChildren.push(el('span', { className: 'tag accent', text: rightTagText, title: rightTagText }));
+    }
+    card.appendChild(el('div', { className: 'card-head' }, headChildren));
+
+    if (!current && !conversations.length) {
+      card.appendChild(el('p', { className: 'empty-note', text: dict.ctxEmpty }));
+      return card;
+    }
+
+    const box = el('div', { className: 'ctx-box' });
+
+    const select = el('select', {
+      className: 'input ctx-select',
+      'aria-label': dict.ctxSelectAria,
+    });
+    const autoTitle =
+      sessionContext?.selectionMode === 'auto' && current?.title
+        ? ` · ${current.title}`
+        : conversations[0]?.title
+          ? ` · ${conversations[0].title}`
+          : '';
+    select.appendChild(el('option', { value: 'auto', text: `${dict.ctxAutoOption}${autoTitle}` }));
+    for (const c of conversations) {
+      const capStr =
+        c.maxContextTokens > 0
+          ? ` (${fmtTokens(c.usedTokens)} / ${fmtTokens(c.maxContextTokens)})`
+          : c.usedTokens > 0
+            ? ` (${fmtTokens(c.usedTokens)})`
+            : '';
+      select.appendChild(el('option', { value: c.conversationId, text: `${c.title || c.conversationId}${capStr}` }));
+    }
+    const desiredVal = state.selectedConvId || 'auto';
+    if (desiredVal === 'auto' || conversations.some((c) => c.conversationId === desiredVal)) {
+      select.value = desiredVal;
+    } else {
+      select.value = 'auto';
+    }
+    select.addEventListener('change', () => {
+      state.selectedConvId = select.value || 'auto';
+      void loadDashboard({ force: false }).catch(() => {});
+    });
+    box.appendChild(el('div', { className: 'ctx-select-row' }, [select]));
+
+    if (current && (current.maxContextTokens > 0 || current.usedTokens > 0)) {
+      const hasMax = current.maxContextTokens > 0;
+      const ratio = hasMax ? Math.max(0, Number(current.usageRatio || 0)) : 0;
+      const pctClamped = hasMax ? Math.min(100, Math.max(1, Math.round(ratio * 100))) : 0;
+      const usedMainText = `${fmtTokens(current.usedTokens)} / ${hasMax ? fmtTokens(current.maxContextTokens) : '--'}`;
+      const usedSubParts = [];
+      if (hasMax) usedSubParts.push(fmtPct(ratio));
+      if (hasMax) usedSubParts.push(`${dict.ctxRemainLabel} ${fmtTokens(current.remainingTokens)}`);
+
+      const exactTip = hasMax
+        ? `${Number(current.usedTokens || 0).toLocaleString()} / ${Number(current.maxContextTokens || 0).toLocaleString()} tokens`
+        : `${Number(current.usedTokens || 0).toLocaleString()} tokens`;
+
+      box.appendChild(
+        el('div', { className: 'ctx-numbers', title: exactTip }, [
+          el('span', { className: 'ctx-used-main', text: usedMainText }),
+          el('span', { className: 'ctx-used-sub', text: usedSubParts.join(' · ') }),
+        ])
+      );
+      box.appendChild(
+        el('div', { className: 'meter' }, [
+          el('div', {
+            className: `meter-fill ${hasMax ? contextLevelClass(ratio) : ''}`,
+            style: { width: `${pctClamped}%` },
+          }),
+        ])
+      );
+
+      const metaItems = [
+        el('span', {
+          className: `ctx-badge${current.isRunning ? ' live' : ''}`,
+          text: current.isRunning
+            ? dict.ctxRunning
+            : current.source === 'estimate'
+              ? dict.ctxSourceEst
+              : dict.ctxSourceExact,
+        }),
+      ];
+      if (current.promptTokens > 0) {
+        metaItems.push(el('span', { text: `${dict.inTok} ${fmtTokens(current.promptTokens)}` }));
+      }
+      if (current.responseTokens > 0) {
+        metaItems.push(el('span', { text: `${dict.outTok} ${fmtTokens(current.responseTokens)}` }));
+      }
+      if (current.estimatedTokensUsed > 0 && current.source === 'usage') {
+        metaItems.push(el('span', { text: dict.ctxEstLabel(fmtTokens(current.estimatedTokensUsed)) }));
+      }
+      const ts = current.lastUserViewMs || current.lastModifiedMs;
+      if (ts) {
+        metaItems.push(el('span', { text: fmtRelative(ts) }));
+      }
+      box.appendChild(el('div', { className: 'entity-sub' }, metaItems));
+    } else {
+      box.appendChild(el('p', { className: 'empty-note', text: dict.ctxPending }));
+    }
+
+    card.appendChild(box);
+    return card;
+  }
+
   function buildQuotaCard(quota) {
     const dict = t();
     const card = el('article', { className: 'card' });
@@ -912,6 +1062,7 @@
       return `${base} · ${ratio >= 0 ? '▲' : '▼'} ${fmtPct(Math.abs(ratio))} ${dict.vsPrevDay}`;
     };
 
+    root.appendChild(buildContextCard(data.sessionContext));
     root.appendChild(buildQuotaCard(data.quota));
 
     // Totals KPI card
@@ -1193,6 +1344,10 @@
     if (typeof data?.revision === 'number') {
       state.lastRevision = data.revision;
     }
+    const ctxCur = data?.sessionContext?.current;
+    state.lastContextSig = ctxCur
+      ? `${ctxCur.conversationId}|${ctxCur.usedTokens}|${ctxCur.maxContextTokens}`
+      : '';
     const nextInterval = Math.max(3000, Number(data?.settings?.syncIntervalMs || 30000));
     if (nextInterval !== state.refreshIntervalMs || !state.fullRefreshTimer) {
       state.refreshIntervalMs = nextInterval;
@@ -1216,6 +1371,9 @@
     }
     const q = new URLSearchParams();
     if (opts?.force) q.set('force', '1');
+    if (state.selectedConvId && state.selectedConvId !== 'auto') {
+      q.set('convId', state.selectedConvId);
+    }
     const suffix = q.toString() ? `?${q.toString()}` : '';
     const pending = requestJson(`/api/dashboard${suffix}`, { method: 'GET' })
       .then((data) => {
@@ -1242,7 +1400,9 @@
       const data = await requestJson('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+        body: JSON.stringify({
+          ...(state.selectedConvId && state.selectedConvId !== 'auto' ? { convId: state.selectedConvId } : {}),
+        }),
       });
       renderAll(data);
     } finally {
@@ -1455,7 +1615,15 @@
         }
         if (!res.ok) return;
         const ver = await res.json();
-        if (typeof ver?.revision === 'number' && ver.revision !== state.lastRevision) {
+        const verCtxSig = ver?.activeConvId
+          ? `${ver.activeConvId}|${ver.activeUsedTokens || 0}|${ver.activeMaxContextTokens || 0}`
+          : '';
+        const ctxChanged =
+          (state.selectedConvId === 'auto' && verCtxSig && verCtxSig !== state.lastContextSig) ||
+          (state.selectedConvId !== 'auto' &&
+            ver?.activeConvId === state.selectedConvId &&
+            verCtxSig !== state.lastContextSig);
+        if ((typeof ver?.revision === 'number' && ver.revision !== state.lastRevision) || ctxChanged) {
           await loadDashboard().catch(() => {});
         }
       } catch {

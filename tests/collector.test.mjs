@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import {
   LocalUsageCollector,
+  parseGenContextSnapshot,
   parseGenMetadataBlob,
   parseStepMetadata,
   toLocalDateKey,
@@ -61,6 +62,9 @@ function makeGenBlob({
   responseId = 'resp-1',
   ttftMs = 250,
   streamingMs = 1250,
+  estimatedTokensUsed = 0,
+  maxContextTokens = 0,
+  omitUsage = false,
 }) {
   const usage = Buffer.concat([
     encodeFieldVarint(2, inputTokens),
@@ -74,9 +78,15 @@ function makeGenBlob({
     encodeFieldString(11, responseId),
   ]);
 
+  const ctxParts = [];
+  if (estimatedTokensUsed > 0) ctxParts.push(encodeFieldVarint(1, estimatedTokensUsed));
+  if (maxContextTokens > 0) ctxParts.push(encodeFieldVarint(4, maxContextTokens));
+  const chatStart = ctxParts.length ? encodeFieldBytes(10, Buffer.concat(ctxParts)) : null;
+
   const g1 = Buffer.concat([
     encodeFieldVarint(3, modelEnum),
-    encodeFieldBytes(4, usage),
+    ...(omitUsage ? [] : [encodeFieldBytes(4, usage)]),
+    ...(chatStart ? [encodeFieldBytes(9, chatStart)] : []),
     encodeFieldBytes(11, makeDurationBlob(ttftMs)),
     encodeFieldBytes(12, makeDurationBlob(streamingMs)),
     encodeFieldString(19, modelId),
@@ -221,6 +231,78 @@ test('LocalUsageCollector scans SQLite DBs and deduplicates shared responseId ac
     // Second pass hits incremental file cache cleanly.
     const snap2 = await collector.collect();
     assert.equal(snap2.totals.totalTokens, 7600);
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('parseGenContextSnapshot and LocalUsageCollector extract current context usage and maxContextTokens', async () => {
+  const estOnlyBlob = makeGenBlob({
+    omitUsage: true,
+    estimatedTokensUsed: 96163,
+    maxContextTokens: 512000,
+    modelId: 'gemini-4-hydrogen',
+    displayName: 'Gemini 4 Hydrogen (High)',
+  });
+  assert.equal(parseGenMetadataBlob(estOnlyBlob), null);
+  const estSnap = parseGenContextSnapshot(estOnlyBlob);
+  assert.ok(estSnap);
+  assert.equal(estSnap.estimatedTokensUsed, 96163);
+  assert.equal(estSnap.maxContextTokens, 512000);
+  assert.equal(estSnap.promptTokens, 0);
+
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-ctx-'));
+  try {
+    const convDir = path.join(tmpRoot, 'conversations');
+    const summariesDb = path.join(tmpRoot, 'conversation_summaries.db');
+    await fs.mkdir(convDir, { recursive: true });
+
+    const ts = Date.now() - 10_000;
+    createConvDb(path.join(convDir, 'conv-usage.db'), 'Usage Session', [
+      {
+        timestampMs: ts,
+        modelId: 'gemini-4-hydrogen',
+        displayName: 'Gemini 4 Hydrogen (High)',
+        inputTokens: 5000,
+        cacheReadTokens: 150000,
+        cacheWriteTokens: 0,
+        outputTokens: 1400,
+        thinkingTokens: 400,
+        responseTokens: 1000,
+        estimatedTokensUsed: 148000,
+        maxContextTokens: 512000,
+        responseId: 'resp-u1',
+      },
+    ]);
+
+    createConvDb(path.join(convDir, 'conv-est.db'), 'Estimate Session', [
+      {
+        timestampMs: ts + 1000,
+        modelId: 'gemini-3.8-flash-n',
+        displayName: 'Gemini 3.8 Flash (High)',
+        omitUsage: true,
+        estimatedTokensUsed: 64200,
+        maxContextTokens: 256000,
+      },
+    ]);
+
+    const collector = new LocalUsageCollector({ conversationsDir: convDir, summariesDb });
+    await collector.collect();
+
+    const uCtx = await collector.getConversationContext('conv-usage');
+    assert.ok(uCtx?.contextInfo);
+    assert.equal(uCtx.contextInfo.source, 'usage');
+    assert.equal(uCtx.contextInfo.promptTokens, 155000);
+    assert.equal(uCtx.contextInfo.responseTokens, 1000);
+    assert.equal(uCtx.contextInfo.usedTokens, 156000);
+    assert.equal(uCtx.contextInfo.maxContextTokens, 512000);
+    assert.equal(uCtx.contextInfo.estimatedTokensUsed, 148000);
+
+    const eCtx = await collector.getConversationContext('conv-est');
+    assert.ok(eCtx?.contextInfo);
+    assert.equal(eCtx.contextInfo.source, 'estimate');
+    assert.equal(eCtx.contextInfo.usedTokens, 64200);
+    assert.equal(eCtx.contextInfo.maxContextTokens, 256000);
   } finally {
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }

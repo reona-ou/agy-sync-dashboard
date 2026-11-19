@@ -13,7 +13,11 @@ import {
   classifyModelFamily,
 } from '../sidecars/dashboard/forecast.mjs';
 import { createDashboardService, createStandaloneHttpServer } from '../sidecars/dashboard/main.mjs';
-import { normalizeQuotaSummary } from '../sidecars/dashboard/quota.mjs';
+import {
+  normalizeQuotaSummary,
+  normalizeTrajectorySummaries,
+  parseRpcGeneratorContext,
+} from '../sidecars/dashboard/quota.mjs';
 import { SNAPSHOT_SCHEMA_VERSION, SyncManager, mergeDeviceSnapshots } from '../sidecars/dashboard/sync.mjs';
 import { parsePropfindXml } from '../sidecars/dashboard/webdav.mjs';
 
@@ -636,4 +640,196 @@ test('buildQuotaForecasts computes current/previous cycle tokens, remaining esti
   const fc7d = enriched.groups[1].windows[0].forecast;
   assert.equal(fc7d.estimatedRemainingTokens, 500_000);
   assert.equal(fc7d.capacitySource, 'calibrated');
+});
+
+test('sessionContext tracks active conversation via live trajectories, hook updates, and manual selection', async () => {
+  const nowMs = Date.now();
+  const trajectories = [
+    {
+      conversationId: 'conv-1',
+      title: 'Older Viewed Session',
+      status: 'CASCADE_RUN_STATUS_IDLE',
+      isRunning: false,
+      stepCount: 10,
+      lastModifiedMs: nowMs - 20_000,
+      lastUserViewMs: nowMs - 15_000,
+      rootConversationId: 'conv-1',
+    },
+    {
+      conversationId: 'conv-2',
+      title: 'Active Focused Session',
+      status: 'CASCADE_RUN_STATUS_RUNNING',
+      isRunning: true,
+      stepCount: 24,
+      lastModifiedMs: nowMs - 30_000,
+      lastUserViewMs: nowMs - 2_000,
+      rootConversationId: 'conv-2',
+    },
+  ];
+
+  const normalizedTrajs = normalizeTrajectorySummaries({
+    trajectorySummaries: {
+      'conv-2': {
+        summary: 'Active Focused Session',
+        status: 'CASCADE_RUN_STATUS_RUNNING',
+        stepCount: 24,
+        lastModifiedTime: new Date(nowMs - 30_000).toISOString(),
+        annotations: { lastUserViewTime: new Date(nowMs - 2_000).toISOString() },
+      },
+    },
+  });
+  assert.equal(normalizedTrajs.length, 1);
+  assert.equal(normalizedTrajs[0].isRunning, true);
+
+  const rpcCtx = parseRpcGeneratorContext({
+    generatorMetadata: [
+      {
+        chatModel: {
+          responseModel: 'gemini-4-hydrogen',
+          modelDisplayName: 'Gemini 4 Hydrogen (High)',
+          usage: {
+            inputTokens: '4000',
+            cacheReadTokens: '120000',
+            outputTokens: '900',
+            thinkingOutputTokens: '300',
+            responseOutputTokens: '600',
+          },
+          chatStartMetadata: {
+            contextWindowMetadata: {
+              estimatedTokensUsed: 118000,
+              maxContextTokens: 512000,
+            },
+          },
+        },
+      },
+    ],
+  });
+  assert.equal(rpcCtx.usedTokens, 124600);
+  assert.equal(rpcCtx.maxContextTokens, 512000);
+
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-ctx-srv-'));
+  let server;
+  try {
+    const dataDir = path.join(tmpRoot, 'data');
+    const contextMap = new Map([
+      [
+        'conv-1',
+        {
+          conversationId: 'conv-1',
+          title: 'Older Viewed Session',
+          lastModifiedMs: nowMs - 20_000,
+          contextInfo: {
+            modelId: 'gemini-3.8-flash-n',
+            displayName: 'Gemini 3.8 Flash (High)',
+            usedTokens: 64000,
+            maxContextTokens: 256000,
+            promptTokens: 63500,
+            responseTokens: 500,
+            estimatedTokensUsed: 62000,
+            source: 'usage',
+            timestampMs: nowMs - 20_000,
+          },
+        },
+      ],
+      [
+        'conv-2',
+        {
+          conversationId: 'conv-2',
+          title: 'Active Focused Session',
+          lastModifiedMs: nowMs - 30_000,
+          contextInfo: {
+            modelId: 'gemini-4-hydrogen',
+            displayName: 'Gemini 4 Hydrogen (High)',
+            usedTokens: 204800,
+            maxContextTokens: 512000,
+            promptTokens: 204000,
+            responseTokens: 800,
+            estimatedTokensUsed: 195000,
+            source: 'usage',
+            timestampMs: nowMs - 30_000,
+          },
+        },
+      ],
+    ]);
+
+    const fakeCollector = {
+      async collect() {
+        return {
+          collectedAt: nowMs,
+          conversationCount: 2,
+          totals: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 0, generations: 0, cacheHitRate: 0 },
+          latestGeneration: null,
+          byDate: {},
+          byModel: {},
+          recentConversations: [],
+        };
+      },
+      listConversationContexts() {
+        return Array.from(contextMap.values());
+      },
+      async getConversationContext(id) {
+        return contextMap.get(id) || null;
+      },
+    };
+
+    const manager = new SyncManager({
+      paths: { pluginDataDir: dataDir, conversationsDir: path.join(tmpRoot, 'c'), summariesDb: path.join(tmpRoot, 's.db') },
+      collector: fakeCollector,
+      dataDir,
+    });
+
+    const service = await createDashboardService({
+      paths: { pluginDataDir: dataDir, pluginConfig: path.join(tmpRoot, 'cfg.json'), conversationsDir: path.join(tmpRoot, 'c'), summariesDb: path.join(tmpRoot, 's.db') },
+      syncManager: manager,
+      quotaClient: {
+        async fetch() {
+          return { connected: false, groups: [], fetchedAt: nowMs };
+        },
+        async fetchTrajectories() {
+          return { connected: true, trajectories, fetchedAt: nowMs };
+        },
+      },
+    });
+
+    server = createStandaloneHttpServer(service, { controlToken: 'tok-ctx' });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}`;
+
+    // Auto mode selects conv-2 (most recent lastUserViewMs)
+    const dashAuto = await (await fetch(`${base}/api/dashboard`)).json();
+    assert.equal(dashAuto.sessionContext.selectionMode, 'auto');
+    assert.equal(dashAuto.sessionContext.detectionSource, 'live-view');
+    assert.equal(dashAuto.sessionContext.current.conversationId, 'conv-2');
+    assert.equal(dashAuto.sessionContext.current.usedTokens, 204800);
+    assert.equal(dashAuto.sessionContext.current.maxContextTokens, 512000);
+    assert.equal(dashAuto.sessionContext.current.remainingTokens, 307200);
+    assert.ok(Math.abs(dashAuto.sessionContext.current.usageRatio - 0.4) < 0.001);
+
+    // /api/version exposes active conversation & context tokens
+    const ver = await (await fetch(`${base}/api/version`)).json();
+    assert.equal(ver.activeConvId, 'conv-2');
+    assert.equal(ver.activeUsedTokens, 204800);
+    assert.equal(ver.activeMaxContextTokens, 512000);
+
+    // Manual convId selection switches to conv-1
+    const dashManual = await (await fetch(`${base}/api/dashboard?convId=conv-1`)).json();
+    assert.equal(dashManual.sessionContext.selectionMode, 'manual');
+    assert.equal(dashManual.sessionContext.current.conversationId, 'conv-1');
+    assert.equal(dashManual.sessionContext.current.usedTokens, 64000);
+    assert.equal(dashManual.sessionContext.current.maxContextTokens, 256000);
+
+    // Hook notification newer than lastUserViewMs promotes conv-1 in auto mode
+    await fetch(`${base}/api/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-agy-sync-token': 'tok-ctx' },
+      body: JSON.stringify({ source: 'hook', conversationId: 'conv-1', updatedAt: nowMs + 5000 }),
+    });
+    const dashHook = await (await fetch(`${base}/api/dashboard`)).json();
+    assert.equal(dashHook.sessionContext.detectionSource, 'hook');
+    assert.equal(dashHook.sessionContext.current.conversationId, 'conv-1');
+  } finally {
+    if (server) await new Promise((r) => server.close(r));
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
 });
