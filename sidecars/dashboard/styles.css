@@ -61,8 +61,22 @@
   --agy-r-lg: 13px;
   --agy-r-pill: 999px;
   --agy-content-max: 780px;
-  --agy-chart-h: 92px;
   --agy-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* Fluid chrome: the pane can be 240px wide (aux pane, 12" 2-in-1 split) or
+     780px+ (full tab), so spacing and display type scale with the viewport
+     instead of waiting for a breakpoint that always fires too late.
+     vw == pane width here: the dashboard renders in its own webview. */
+  --agy-pad-page: clamp(8px, 2.4vw, 12px);
+  --agy-pad-card: clamp(9px, 2.7vw, 12px);
+  --agy-stack-gap: clamp(9px, 1.5vw, 11px);
+  --agy-chart-h: clamp(66px, 18vw, 92px);
+  --agy-fs-kpi: clamp(16.5px, 4.4vw, 20px);
+  /* Narrowest track a tile may shrink to before the grid gives it a line of
+     its own; auto-fit reads these so columns collapse on room actually left. */
+  --agy-col-min: 148px;
+  --agy-col-min-form: 178px;
+  --agy-col-min-mode: 126px;
 }
 
 [data-theme='light'] {
@@ -159,7 +173,7 @@ body {
   backdrop-filter: blur(10px) saturate(140%);
   -webkit-backdrop-filter: blur(10px) saturate(140%);
   border-bottom: 1px solid var(--agy-border);
-  padding: 10px 12px 0;
+  padding: 10px var(--agy-pad-page) 0;
 }
 
 /* cap the measure so the pane still reads in a wide split view */
@@ -382,7 +396,7 @@ body {
 /* ----------------------------------------------------------------- panels */
 
 .panels {
-  padding: 12px 12px 22px;
+  padding: var(--agy-pad-page) var(--agy-pad-page) 22px;
   flex: 1;
   min-width: 0;
   max-width: 100%;
@@ -400,7 +414,7 @@ body {
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 11px;
+  gap: var(--agy-stack-gap);
   min-width: 0;
   max-width: var(--agy-content-max);
   margin-inline: auto;
@@ -411,7 +425,7 @@ body {
   background: var(--agy-surface);
   border: 1px solid var(--agy-border-soft);
   border-radius: var(--agy-r-lg);
-  padding: 12px 13px;
+  padding: var(--agy-pad-card) calc(var(--agy-pad-card) + 1px);
   min-width: 0;
   max-width: 100%;
   color: var(--agy-fg);
@@ -428,7 +442,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  /* the title is the priority: it keeps its full text and the chip drops to a
+     second line when both cannot fit, instead of both ellipsising */
+  flex-wrap: wrap;
+  gap: 3px 8px;
   min-width: 0;
   margin-bottom: 10px;
   padding-bottom: 8px;
@@ -441,6 +458,7 @@ body {
   font-weight: 650;
   color: var(--agy-fg);
   letter-spacing: -0.005em;
+  flex: 1 1 max-content;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -455,7 +473,8 @@ body {
   background: var(--agy-surface-2);
   color: var(--agy-muted);
   border: 1px solid var(--agy-border-soft);
-  max-width: 180px;
+  /* never let the chip starve the title it annotates */
+  max-width: min(180px, 52%);
   flex-shrink: 1;
   min-width: 0;
   overflow: hidden;
@@ -472,16 +491,12 @@ body {
 
 /* -------------------------------------------------------------------- kpi */
 
+/* auto-fit, not repeat(2, …): a tile drops to one column the moment its label
+   or number would be squeezed, whatever the pane width or font scale is. */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--agy-col-min)), 1fr));
   gap: 8px;
-}
-
-@container (max-width: 290px) {
-  .kpi-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 .kpi-box {
@@ -509,18 +524,21 @@ body {
   letter-spacing: 0.02em;
   color: var(--agy-muted);
   margin-bottom: 3px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .kpi-value {
-  font-size: 20px;
+  font-size: var(--agy-fs-kpi);
   font-weight: 700;
   color: var(--agy-fg);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.03em;
   line-height: 1.15;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .kpi-sub {
@@ -528,9 +546,9 @@ body {
   font-size: 10.5px;
   color: var(--agy-muted);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* in/out/delta are three facts on one line: wrapping keeps all of them,
+     ellipsising would silently drop the day-over-day figure */
+  overflow-wrap: break-word;
 }
 
 /* ------------------------------------------------------------------ quota */
@@ -559,7 +577,8 @@ body {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 1px 8px;
   font-size: 12px;
   min-width: 0;
 }
@@ -567,6 +586,8 @@ body {
 .quota-name {
   font-weight: 600;
   color: var(--agy-fg);
+  /* own line rather than a 40px sliver next to the countdown */
+  flex: 1 1 150px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -579,7 +600,12 @@ body {
   font-weight: 650;
   color: var(--agy-muted);
   white-space: nowrap;
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .meter {
@@ -692,7 +718,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 2px 8px;
   min-width: 0;
 }
 
@@ -700,6 +727,7 @@ body {
   font-size: 12.5px;
   font-weight: 650;
   color: var(--agy-fg);
+  flex: 1 1 max-content;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -728,17 +756,24 @@ body {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 0 8px;
   min-width: 0;
   font-variant-numeric: tabular-nums;
 }
 
+/* Both figures are nowrap, so without min-width:0 they refuse to shrink and
+   paint past the tile edge. They now break onto two lines, then ellipsize. */
 .ctx-used-main {
   font-size: 15px;
   font-weight: 700;
   color: var(--agy-fg);
   letter-spacing: -0.02em;
   white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ctx-used-sub {
@@ -746,6 +781,11 @@ body {
   font-weight: 600;
   color: var(--agy-muted);
   white-space: nowrap;
+  flex: 0 1 auto;
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ctx-badge {
@@ -756,6 +796,7 @@ body {
   background: var(--agy-surface-2);
   color: var(--agy-muted);
   border: 1px solid var(--agy-border-soft);
+  flex: 0 0 auto;
 }
 
 .ctx-badge.live {
@@ -835,9 +876,18 @@ body {
 .chart-axis {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
   font-size: 10.5px;
   color: var(--agy-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.chart-axis > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chart-detail {
@@ -875,7 +925,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 1px 8px;
   min-width: 0;
 }
 
@@ -886,10 +937,24 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1 1 max-content;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* the name is the shrinkable part; the 本机/过期 chips stay legible beside it */
+.entity-title > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity-title > .tag {
+  max-width: min(120px, 40%);
+  flex: 0 1 auto;
 }
 
 .entity-val {
@@ -900,6 +965,10 @@ body {
   letter-spacing: -0.01em;
   white-space: nowrap;
   flex-shrink: 0;
+  margin-left: auto;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .entity-sub {
@@ -961,6 +1030,7 @@ body {
   font-size: 12px;
   font-weight: 600;
   color: var(--agy-fg);
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1144,7 +1214,7 @@ select.input {
 
 .mode-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--agy-col-min-mode)), 1fr));
   gap: 6px;
 }
 
@@ -1201,7 +1271,8 @@ select.input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 3px 8px;
   min-width: 0;
 }
 
@@ -1209,6 +1280,9 @@ select.input {
   font-size: 11.5px;
   font-weight: 650;
   color: var(--agy-fg);
+  /* max-content basis + wrap: the section label keeps its full text and the
+     test button drops below once the card is too narrow to share a line */
+  flex: 1 1 max-content;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1218,13 +1292,13 @@ select.input {
 .input-with-btn {
   display: flex;
   align-items: stretch;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
 }
 
 .input-with-btn .input {
-  flex: 1 1 0%;
-  width: 0;
+  flex: 1 1 132px;
   min-width: 0;
 }
 
@@ -1257,15 +1331,50 @@ select.input {
 
 .field-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--agy-col-min-form)), 1fr));
   gap: 9px;
   min-width: 0;
 }
 
-@container (max-width: 300px) {
-  .field-grid,
+/* Wide cards keep the original pairing: four tiles read better as 2x2 than as
+   a row of four 180px slivers, and auto-fit alone cannot express "never 3". */
+@container (min-width: 480px) {
+  .kpi-grid,
   .mode-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Below these card widths a label + chip/button pair stops fitting side by
+   side, so it stacks instead of ellipsizing both halves into noise.
+   Container queries, not viewport ones: they follow the real card width. */
+@container (max-width: 300px) {
+  .input-with-btn .icon-btn,
+  .input-with-btn .chip-btn {
+    flex: 1 1 100%;
+  }
+}
+
+/* Chat titles are unbounded, so their rows keep the label-plus-number line
+   and only give the number a row of its own once nothing else fits. */
+@container (max-width: 252px) {
+  .conv-top {
+    flex-wrap: wrap;
+  }
+
+  .conv-title-wrap {
+    flex: 1 1 60%;
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .card-head .tag,
+  .entity-title > .tag {
+    max-width: 100%;
+  }
+
+  .entity-val {
+    max-width: 100%;
   }
 }
 
@@ -1336,32 +1445,71 @@ select.input {
   }
 }
 
-/* narrow sidebar / aux-pane width */
-@media (max-width: 380px) {
+/* ------------------------------------------------------ narrow pane tiers */
+
+/* Card interiors react to their own width via the container queries above.
+   These tiers handle the chrome, where the pane *is* the viewport: the
+   dashboard can live in a ~230px aux pane on a 12" 2-in-1 or a full tab. */
+@media (max-width: 520px) {
   .topbar {
     padding: 9px 10px 0;
   }
+}
 
-  .panels {
-    padding: 10px 10px 18px;
+@media (max-width: 420px) {
+  .tab-btn {
+    padding: 7px 9px 9px;
   }
 
-  .card {
-    padding: 11px;
-    border-radius: var(--agy-r-md);
-  }
-
-  .kpi-value {
-    font-size: 18px;
+  .chart-bars {
+    gap: 3px;
   }
 
   .status-pill {
     max-width: 132px;
   }
+}
 
-  :root,
-  [data-theme='dark'] {
-    --agy-chart-h: 74px;
+@media (max-width: 340px) {
+  .card {
+    border-radius: var(--agy-r-md);
+  }
+
+  /* two header lines beat a title and a pill ellipsising each other */
+  .brand-row {
+    flex-wrap: wrap;
+    row-gap: 5px;
+  }
+
+  .brand-left {
+    flex: 1 1 100%;
+  }
+
+  .brand-actions {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+
+  .status-pill {
+    max-width: none;
+    flex: 0 1 auto;
+  }
+
+  .tab-btn {
+    padding: 6px 8px 8px;
+    font-size: 12px;
+  }
+
+  .conv-row {
+    margin-inline: -5px;
+    padding: 7px 5px;
+  }
+
+  .kpi-box,
+  .quota-item,
+  .ctx-box,
+  .subcard {
+    padding: 8px 9px;
   }
 }
 

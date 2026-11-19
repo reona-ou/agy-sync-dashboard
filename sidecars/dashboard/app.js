@@ -865,6 +865,7 @@
       el('span', {
         className: 'tag',
         text: quota?.maskedEmail ? `${quota.maskedEmail}${quota.planName ? ` · ${quota.planName}` : ''}` : dict.quotaNote,
+        title: quota?.maskedEmail ? `${quota.maskedEmail}${quota.planName ? ` · ${quota.planName}` : ''}` : dict.quotaNote,
       }),
     ]);
     card.appendChild(head);
@@ -887,7 +888,11 @@
             : '';
         const itemChildren = [
           el('div', { className: 'quota-top' }, [
-            el('span', { className: 'quota-name', text: `${grp.title} (${winLabel})` }),
+            el('span', {
+              className: 'quota-name',
+              text: `${grp.title} (${winLabel})`,
+              title: `${grp.title} (${winLabel})`,
+            }),
             el('span', {
               className: 'quota-meta',
               text: `${Math.round(frac * 100)}%${resetText ? ` · ${resetText}` : ''}`,
@@ -1144,7 +1149,11 @@
         const rowChildren = [
           el('div', { className: 'conv-top' }, [
             el('div', { className: 'conv-title-wrap' }, [
-              el('span', { className: 'conv-title', text: c.title || c.conversationId }),
+              el('span', {
+                className: 'conv-title',
+                text: c.title || c.conversationId,
+                title: c.title || c.conversationId,
+              }),
               isRunning
                 ? el('span', { className: 'ctx-badge live', text: dict.ctxRunning })
                 : isCurrent
@@ -1235,7 +1244,7 @@
       const row = el('div', { className: 'entity-row' }, [
         el('div', { className: 'entity-top' }, [
           el('div', { className: 'entity-title' }, [
-            el('span', { text: dev.deviceName }),
+            el('span', { text: dev.deviceName, title: dev.deviceName }),
             dev.isCurrent ? el('span', { className: 'tag accent', text: dict.currentDevice }) : null,
             isStale ? el('span', { className: 'tag', text: dict.staleBadge }) : null,
           ]),
@@ -1284,7 +1293,11 @@
       list.appendChild(
         el('div', { className: 'entity-row' }, [
           el('div', { className: 'entity-top' }, [
-            el('span', { className: 'entity-title', text: m.displayName || m.modelId }),
+            el('span', { className: 'entity-title' }, [
+              // inner span: text-overflow needs a block, and the row is a flex
+              // container once the name is wrapped in an element of its own
+              el('span', { text: m.displayName || m.modelId, title: m.displayName || m.modelId }),
+            ]),
             el('span', { className: 'entity-val', text: fmtTokens(m.totalTokens) }),
           ]),
           el('div', { className: 'meter' }, [
