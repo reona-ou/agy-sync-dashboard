@@ -380,6 +380,25 @@ function resolveStepTimestamp(stepIndices, stepTimeMap, fallbackMs) {
   return { timestampMs: timestampMs || fallbackMs, streamWallMs };
 }
 
+function formatLatestGeneration(gen) {
+  if (!gen) return null;
+  const tps =
+    gen.genDurationMs >= 100
+      ? Number(((gen.outputTokens * 1000) / gen.genDurationMs).toFixed(1))
+      : 0;
+  return {
+    timestampMs: gen.timestampMs,
+    modelId: gen.modelId,
+    displayName: gen.displayName,
+    inputTokens: gen.inputTokens,
+    outputTokens: gen.outputTokens,
+    cacheReadTokens: gen.cacheReadTokens,
+    totalTokens: gen.totalTokens,
+    tps,
+    ttftMs: gen.ttftMs,
+  };
+}
+
 function buildContextFromRows(genRows, stepTimeMap, fallbackMs) {
   if (!genRows?.length) return null;
 
@@ -526,6 +545,11 @@ export function scanConversationDb(dbPath, summaryMeta = null) {
     }
 
     const contextInfo = buildContextFromRows(genRows, stepTimeMap, fallbackMs);
+    if (contextInfo) {
+      contextInfo.latestGeneration = generations.length
+        ? formatLatestGeneration(generations[generations.length - 1])
+        : null;
+    }
 
     return {
       convId,
@@ -604,7 +628,12 @@ export class LocalUsageCollector {
         try {
           const sig = await this.fileSignature(dbPath);
           const cached = this.fileCache.get(dbPath);
-          if (cached && cached.sig === sig && 'contextInfo' in cached.data) {
+          if (
+            cached &&
+            cached.sig === sig &&
+            'contextInfo' in cached.data &&
+            (!cached.data.contextInfo || 'latestGeneration' in cached.data.contextInfo)
+          ) {
             const entry = {
               conversationId: cached.data.convId,
               title: cached.data.title,
@@ -671,7 +700,8 @@ export class LocalUsageCollector {
           cached &&
           cached.sig === sig &&
           cached.title === (summaryMeta?.title || cached.title) &&
-          'contextInfo' in cached.data
+          'contextInfo' in cached.data &&
+          (!cached.data.contextInfo || 'latestGeneration' in cached.data.contextInfo)
         ) {
           convResults.push(cached.data);
           continue;
@@ -702,6 +732,18 @@ export class LocalUsageCollector {
         conversationId: conv.convId,
         title: conv.title,
         lastModifiedMs: conv.lastModifiedMs,
+        modelId: conv.contextInfo?.modelId || '',
+        displayName: conv.contextInfo?.displayName || '',
+        contextUsedTokens: conv.contextInfo?.usedTokens || 0,
+        maxContextTokens: conv.contextInfo?.maxContextTokens || 0,
+        latestGeneration: conv.contextInfo?.latestGeneration
+          ? {
+              totalTokens: conv.contextInfo.latestGeneration.totalTokens,
+              tps: conv.contextInfo.latestGeneration.tps,
+              ttftMs: conv.contextInfo.latestGeneration.ttftMs,
+              timestampMs: conv.contextInfo.latestGeneration.timestampMs,
+            }
+          : null,
         ...emptyBucket(),
       });
       nextContexts.set(conv.convId, {
@@ -772,11 +814,6 @@ export class LocalUsageCollector {
       .sort((a, b) => b.lastModifiedMs - a.lastModifiedMs)
       .slice(0, 12);
 
-    const activeSpeedTps =
-      latestGen && latestGen.genDurationMs >= 100
-        ? Number(((latestGen.outputTokens * 1000) / latestGen.genDurationMs).toFixed(1))
-        : 0;
-
     const cacheDenom = totals.inputTokens + totals.cacheReadTokens;
     const cacheHitRate = cacheDenom > 0 ? Number((totals.cacheReadTokens / cacheDenom).toFixed(4)) : 0;
 
@@ -787,19 +824,7 @@ export class LocalUsageCollector {
         ...totals,
         cacheHitRate,
       },
-      latestGeneration: latestGen
-        ? {
-            timestampMs: latestGen.timestampMs,
-            modelId: latestGen.modelId,
-            displayName: latestGen.displayName,
-            inputTokens: latestGen.inputTokens,
-            outputTokens: latestGen.outputTokens,
-            cacheReadTokens: latestGen.cacheReadTokens,
-            totalTokens: latestGen.totalTokens,
-            tps: activeSpeedTps,
-            ttftMs: latestGen.ttftMs,
-          }
-        : null,
+      latestGeneration: formatLatestGeneration(latestGen),
       byDate,
       byModel,
       bySlot,

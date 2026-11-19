@@ -688,22 +688,40 @@ body {
   border: 1px solid var(--agy-border-soft);
 }
 
-.ctx-select-row {
+.ctx-conv-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
 }
 
-select.input.ctx-select {
-  flex: 1 1 0%;
-  width: 0;
+.ctx-conv-name {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--agy-fg);
   min-width: 0;
-  padding: 5px 26px 5px 8px;
-  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-gen-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  padding-top: 6px;
+  margin-top: 1px;
+  border-top: 1px dashed var(--agy-border);
+  font-size: 11px;
+  color: var(--agy-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx-gen-label {
   font-weight: 600;
-  background-color: var(--agy-surface);
-  border-color: var(--agy-border);
+  color: var(--agy-fg);
 }
 
 .ctx-numbers {
@@ -925,10 +943,18 @@ select.input.ctx-select {
 
 .conv-top {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+}
+
+.conv-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .conv-title {
@@ -941,10 +967,27 @@ select.input.ctx-select {
   white-space: nowrap;
 }
 
+.meter.mini {
+  height: 4px;
+  margin: 2px 0;
+}
+
+.conv-ctx {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px 8px;
+  font-size: 10.5px;
+  color: var(--agy-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .conv-meta {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 8px;
+  gap: 2px 8px;
   font-size: 10.5px;
   color: var(--agy-muted);
   font-variant-numeric: tabular-nums;

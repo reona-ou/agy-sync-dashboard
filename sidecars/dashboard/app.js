@@ -103,14 +103,15 @@
       diagSnapshot: '本机快照',
       diagLastSync: '最近同步',
       diagSyncError: '同步错误',
-      ctxTitle: '当前对话上下文',
-      ctxAutoOption: '自动跟随当前会话',
-      ctxSelectAria: '选择要查看上下文的会话',
+      ctxTitle: '当前对话',
       ctxRemainLabel: '剩余',
       ctxEstLabel: (v) => `预估 ${v}`,
       ctxSourceExact: 'API 实测',
       ctxSourceEst: '本地预估',
       ctxRunning: '生成中',
+      ctxLatestGen: '最近生成',
+      ctxLabelShort: '上下文',
+      ctxActiveBadge: '当前',
       ctxPending: '当前会话尚未产生模型调用，发送消息后将显示上下文占用。',
       ctxEmpty: '暂未检测到本地对话记录。',
       inTok: '输入',
@@ -222,14 +223,15 @@
       diagSnapshot: 'Local snapshot',
       diagLastSync: 'Last sync',
       diagSyncError: 'Sync error',
-      ctxTitle: 'Current Session Context',
-      ctxAutoOption: 'Auto-follow active session',
-      ctxSelectAria: 'Select conversation for context view',
+      ctxTitle: 'Current Session',
       ctxRemainLabel: 'Left',
       ctxEstLabel: (v) => `Est. ${v}`,
       ctxSourceExact: 'Measured',
       ctxSourceEst: 'Estimated',
       ctxRunning: 'Running',
+      ctxLatestGen: 'Last gen',
+      ctxLabelShort: 'Context',
+      ctxActiveBadge: 'Active',
       ctxPending: 'No model turns in this session yet. Send a message to see context usage.',
       ctxEmpty: 'No local conversations found yet.',
       inTok: 'In',
@@ -341,14 +343,15 @@
       diagSnapshot: 'ローカルスナップショット',
       diagLastSync: '最終同期',
       diagSyncError: '同期エラー',
-      ctxTitle: '現在の会話コンテキスト',
-      ctxAutoOption: 'アクティブ会話を自動追従',
-      ctxSelectAria: 'コンテキストを表示する会話を選択',
+      ctxTitle: '現在の会話',
       ctxRemainLabel: '残り',
       ctxEstLabel: (v) => `推定 ${v}`,
       ctxSourceExact: '実測値',
       ctxSourceEst: '推定値',
       ctxRunning: '生成中',
+      ctxLatestGen: '最新生成',
+      ctxLabelShort: 'コンテキスト',
+      ctxActiveBadge: '現在',
       ctxPending: 'この会話ではまだモデル呼び出しがありません。メッセージ送信後に表示されます。',
       ctxEmpty: 'ローカルの会話履歴がまだ見つかりません。',
       inTok: '入力',
@@ -370,7 +373,6 @@
     lang: 'zh-CN',
     dashboard: null,
     selectedDateKey: null,
-    selectedConvId: 'auto',
     syncing: false,
     settingsDirty: false,
     selectedSyncMode: 'folder',
@@ -739,112 +741,116 @@
     return 'ok';
   }
 
-  function buildContextCard(sessionContext) {
+  function buildContextCard(sessionContext, localLatestGen) {
     const dict = t();
     const card = el('article', { className: 'card' });
     const current = sessionContext?.current || null;
-    const conversations = sessionContext?.conversations || [];
 
-    const rightTagText = current?.displayName || current?.modelId || (current?.isRunning ? dict.ctxRunning : '');
+    const rightTagText =
+      current?.displayName || current?.modelId || localLatestGen?.displayName || '';
     const headChildren = [el('h2', { className: 'card-title', text: dict.ctxTitle })];
     if (rightTagText) {
       headChildren.push(el('span', { className: 'tag accent', text: rightTagText, title: rightTagText }));
     }
     card.appendChild(el('div', { className: 'card-head' }, headChildren));
 
-    if (!current && !conversations.length) {
+    const genInfo = current?.latestGeneration || localLatestGen || null;
+    if (!current && !genInfo) {
       card.appendChild(el('p', { className: 'empty-note', text: dict.ctxEmpty }));
       return card;
     }
 
     const box = el('div', { className: 'ctx-box' });
 
-    const select = el('select', {
-      className: 'input ctx-select',
-      'aria-label': dict.ctxSelectAria,
-    });
-    const autoTitle =
-      sessionContext?.selectionMode === 'auto' && current?.title
-        ? ` · ${current.title}`
-        : conversations[0]?.title
-          ? ` · ${conversations[0].title}`
-          : '';
-    select.appendChild(el('option', { value: 'auto', text: `${dict.ctxAutoOption}${autoTitle}` }));
-    for (const c of conversations) {
-      const capStr =
-        c.maxContextTokens > 0
-          ? ` (${fmtTokens(c.usedTokens)} / ${fmtTokens(c.maxContextTokens)})`
-          : c.usedTokens > 0
-            ? ` (${fmtTokens(c.usedTokens)})`
+    if (current) {
+      const statusText = current.isRunning
+        ? dict.ctxRunning
+        : current.source === 'estimate'
+          ? dict.ctxSourceEst
+          : current.source === 'usage'
+            ? dict.ctxSourceExact
             : '';
-      select.appendChild(el('option', { value: c.conversationId, text: `${c.title || c.conversationId}${capStr}` }));
-    }
-    const desiredVal = state.selectedConvId || 'auto';
-    if (desiredVal === 'auto' || conversations.some((c) => c.conversationId === desiredVal)) {
-      select.value = desiredVal;
-    } else {
-      select.value = 'auto';
-    }
-    select.addEventListener('change', () => {
-      state.selectedConvId = select.value || 'auto';
-      void loadDashboard({ force: false }).catch(() => {});
-    });
-    box.appendChild(el('div', { className: 'ctx-select-row' }, [select]));
-
-    if (current && (current.maxContextTokens > 0 || current.usedTokens > 0)) {
-      const hasMax = current.maxContextTokens > 0;
-      const ratio = hasMax ? Math.max(0, Number(current.usageRatio || 0)) : 0;
-      const pctClamped = hasMax ? Math.min(100, Math.max(1, Math.round(ratio * 100))) : 0;
-      const usedMainText = `${fmtTokens(current.usedTokens)} / ${hasMax ? fmtTokens(current.maxContextTokens) : '--'}`;
-      const usedSubParts = [];
-      if (hasMax) usedSubParts.push(fmtPct(ratio));
-      if (hasMax) usedSubParts.push(`${dict.ctxRemainLabel} ${fmtTokens(current.remainingTokens)}`);
-
-      const exactTip = hasMax
-        ? `${Number(current.usedTokens || 0).toLocaleString()} / ${Number(current.maxContextTokens || 0).toLocaleString()} tokens`
-        : `${Number(current.usedTokens || 0).toLocaleString()} tokens`;
-
       box.appendChild(
-        el('div', { className: 'ctx-numbers', title: exactTip }, [
-          el('span', { className: 'ctx-used-main', text: usedMainText }),
-          el('span', { className: 'ctx-used-sub', text: usedSubParts.join(' · ') }),
-        ])
-      );
-      box.appendChild(
-        el('div', { className: 'meter' }, [
-          el('div', {
-            className: `meter-fill ${hasMax ? contextLevelClass(ratio) : ''}`,
-            style: { width: `${pctClamped}%` },
+        el('div', { className: 'ctx-conv-row' }, [
+          el('span', {
+            className: 'ctx-conv-name',
+            text: current.title || current.conversationId,
+            title: current.title || current.conversationId,
           }),
+          statusText
+            ? el('span', {
+                className: `ctx-badge${current.isRunning ? ' live' : ''}`,
+                text: statusText,
+              })
+            : null,
         ])
       );
 
-      const metaItems = [
-        el('span', {
-          className: `ctx-badge${current.isRunning ? ' live' : ''}`,
-          text: current.isRunning
-            ? dict.ctxRunning
-            : current.source === 'estimate'
-              ? dict.ctxSourceEst
-              : dict.ctxSourceExact,
-        }),
+      if (current.maxContextTokens > 0 || current.usedTokens > 0) {
+        const hasMax = current.maxContextTokens > 0;
+        const ratio = hasMax ? Math.max(0, Number(current.usageRatio || 0)) : 0;
+        const pctClamped = hasMax ? Math.min(100, Math.max(1, Math.round(ratio * 100))) : 0;
+        const usedMainText = `${fmtTokens(current.usedTokens)} / ${hasMax ? fmtTokens(current.maxContextTokens) : '--'}`;
+        const usedSubParts = [];
+        if (hasMax) usedSubParts.push(fmtPct(ratio));
+        if (hasMax) usedSubParts.push(`${dict.ctxRemainLabel} ${fmtTokens(current.remainingTokens)}`);
+
+        const exactTip = hasMax
+          ? `${Number(current.usedTokens || 0).toLocaleString()} / ${Number(current.maxContextTokens || 0).toLocaleString()} tokens`
+          : `${Number(current.usedTokens || 0).toLocaleString()} tokens`;
+
+        box.appendChild(
+          el('div', { className: 'ctx-numbers', title: exactTip }, [
+            el('span', { className: 'ctx-used-main', text: usedMainText }),
+            el('span', { className: 'ctx-used-sub', text: usedSubParts.join(' · ') }),
+          ])
+        );
+        box.appendChild(
+          el('div', { className: 'meter' }, [
+            el('div', {
+              className: `meter-fill ${hasMax ? contextLevelClass(ratio) : ''}`,
+              style: { width: `${pctClamped}%` },
+            }),
+          ])
+        );
+
+        const metaItems = [];
+        if (current.promptTokens > 0) {
+          metaItems.push(el('span', { text: `${dict.inTok} ${fmtTokens(current.promptTokens)}` }));
+        }
+        if (current.responseTokens > 0) {
+          metaItems.push(el('span', { text: `${dict.outTok} ${fmtTokens(current.responseTokens)}` }));
+        }
+        if (current.estimatedTokensUsed > 0 && current.source === 'usage') {
+          metaItems.push(el('span', { text: dict.ctxEstLabel(fmtTokens(current.estimatedTokensUsed)) }));
+        }
+        const ts = current.lastUserViewMs || current.lastModifiedMs;
+        if (ts) {
+          metaItems.push(el('span', { text: fmtRelative(ts) }));
+        }
+        if (metaItems.length) {
+          box.appendChild(el('div', { className: 'entity-sub' }, metaItems));
+        }
+      } else {
+        box.appendChild(el('p', { className: 'empty-note', text: dict.ctxPending }));
+      }
+    }
+
+    if (genInfo) {
+      const genItems = [
+        el('span', { className: 'ctx-gen-label', text: dict.ctxLatestGen }),
+        el('span', { text: `${fmtTokens(genInfo.totalTokens)} tok` }),
       ];
-      if (current.promptTokens > 0) {
-        metaItems.push(el('span', { text: `${dict.inTok} ${fmtTokens(current.promptTokens)}` }));
+      if (genInfo.tps > 0) {
+        genItems.push(el('span', { text: `${genInfo.tps} tok/s` }));
       }
-      if (current.responseTokens > 0) {
-        metaItems.push(el('span', { text: `${dict.outTok} ${fmtTokens(current.responseTokens)}` }));
+      if (genInfo.ttftMs > 0) {
+        genItems.push(el('span', { text: `TTFT ${(genInfo.ttftMs / 1000).toFixed(2)}s` }));
       }
-      if (current.estimatedTokensUsed > 0 && current.source === 'usage') {
-        metaItems.push(el('span', { text: dict.ctxEstLabel(fmtTokens(current.estimatedTokensUsed)) }));
+      if (genInfo.timestampMs) {
+        genItems.push(el('span', { text: fmtRelative(genInfo.timestampMs) }));
       }
-      const ts = current.lastUserViewMs || current.lastModifiedMs;
-      if (ts) {
-        metaItems.push(el('span', { text: fmtRelative(ts) }));
-      }
-      box.appendChild(el('div', { className: 'entity-sub' }, metaItems));
-    } else {
-      box.appendChild(el('p', { className: 'empty-note', text: dict.ctxPending }));
+      box.appendChild(el('div', { className: 'ctx-gen-foot' }, genItems));
     }
 
     card.appendChild(box);
@@ -1062,7 +1068,7 @@
       return `${base} · ${ratio >= 0 ? '▲' : '▼'} ${fmtPct(Math.abs(ratio))} ${dict.vsPrevDay}`;
     };
 
-    root.appendChild(buildContextCard(data.sessionContext));
+    root.appendChild(buildContextCard(data.sessionContext, data.device?.local?.latestGeneration));
     root.appendChild(buildQuotaCard(data.quota));
 
     // Totals KPI card
@@ -1111,32 +1117,15 @@
     totalsCard.appendChild(grid);
     root.appendChild(totalsCard);
 
-    // Latest local generation
-    const latest = data.device?.local?.latestGeneration;
-    if (latest) {
-      const latestCard = el('article', { className: 'card' });
-      latestCard.appendChild(
-        el('div', { className: 'card-head' }, [
-          el('h2', { className: 'card-title', text: dict.latestGenTitle }),
-          el('span', { className: 'tag', text: fmtRelative(latest.timestampMs) }),
-        ])
-      );
-      latestCard.appendChild(
-        el('div', { className: 'entity-sub' }, [
-          el('strong', { text: latest.displayName }),
-          el('span', { text: `${fmtTokens(latest.totalTokens)} tok` }),
-          latest.tps > 0 ? el('span', { text: `${latest.tps} tok/s` }) : null,
-          latest.ttftMs > 0 ? el('span', { text: `TTFT ${(latest.ttftMs / 1000).toFixed(2)}s` }) : null,
-        ])
-      );
-      root.appendChild(latestCard);
-    }
-
     // 14-day trend
     root.appendChild(buildTrendCard(merged.byDate, merged.todayKey));
 
     // Recent conversations
     if (merged.recentConversations?.length) {
+      const liveConvMap = new Map(
+        (data.sessionContext?.conversations || []).map((item) => [item.conversationId, item])
+      );
+      const activeConvId = data.sessionContext?.current?.conversationId || '';
       const convCard = el('article', { className: 'card' });
       convCard.appendChild(
         el('div', { className: 'card-head' }, [
@@ -1145,18 +1134,68 @@
       );
       const list = el('div', { className: 'conv-list' });
       for (const c of merged.recentConversations.slice(0, 8)) {
-        list.appendChild(
-          el('div', { className: 'conv-row' }, [
-            el('div', { className: 'conv-top' }, [
+        const live = liveConvMap.get(c.conversationId);
+        const ctxUsed = Number(live?.usedTokens || c.contextUsedTokens || 0);
+        const ctxMax = Number(live?.maxContextTokens || c.maxContextTokens || 0);
+        const modelLabel = live?.displayName || c.displayName || c.modelId || '';
+        const isCurrent = activeConvId && c.conversationId === activeConvId;
+        const isRunning = Boolean(live?.isRunning);
+
+        const rowChildren = [
+          el('div', { className: 'conv-top' }, [
+            el('div', { className: 'conv-title-wrap' }, [
               el('span', { className: 'conv-title', text: c.title || c.conversationId }),
-              el('span', { className: 'entity-val', text: fmtTokens(c.totalTokens) }),
+              isRunning
+                ? el('span', { className: 'ctx-badge live', text: dict.ctxRunning })
+                : isCurrent
+                  ? el('span', { className: 'ctx-badge', text: dict.ctxActiveBadge })
+                  : null,
             ]),
-            el('div', { className: 'conv-meta' }, [
-              el('span', { text: `${c.deviceName} · ${c.generations} ${dict.gens}` }),
-              el('span', { text: fmtRelative(c.lastModifiedMs) }),
-            ]),
+            el('span', { className: 'entity-val', text: fmtTokens(c.totalTokens) }),
+          ]),
+        ];
+
+        if (ctxMax > 0 || ctxUsed > 0) {
+          const hasMax = ctxMax > 0;
+          const ratio = hasMax ? Math.max(0, ctxUsed / ctxMax) : 0;
+          const pctW = hasMax ? Math.min(100, Math.max(2, Math.round(ratio * 100))) : 0;
+          if (hasMax) {
+            rowChildren.push(
+              el('div', { className: 'meter mini' }, [
+                el('div', {
+                  className: `meter-fill ${contextLevelClass(ratio)}`,
+                  style: { width: `${pctW}%` },
+                }),
+              ])
+            );
+          }
+          const ctxText = hasMax
+            ? `${dict.ctxLabelShort} ${fmtTokens(ctxUsed)} / ${fmtTokens(ctxMax)} (${fmtPct(ratio)})`
+            : `${dict.ctxLabelShort} ${fmtTokens(ctxUsed)}`;
+          rowChildren.push(
+            el('div', { className: 'conv-ctx' }, [
+              el('span', { text: ctxText }),
+              modelLabel ? el('span', { text: modelLabel }) : null,
+            ])
+          );
+        } else if (modelLabel) {
+          rowChildren.push(
+            el('div', { className: 'conv-ctx' }, [el('span', { text: modelLabel })])
+          );
+        }
+
+        const metaLeftParts = [`${c.deviceName} · ${c.generations} ${dict.gens}`];
+        if (c.latestGeneration?.tps > 0) {
+          metaLeftParts.push(`${c.latestGeneration.tps} tok/s`);
+        }
+        rowChildren.push(
+          el('div', { className: 'conv-meta' }, [
+            el('span', { text: metaLeftParts.join(' · ') }),
+            el('span', { text: fmtRelative(c.lastModifiedMs) }),
           ])
         );
+
+        list.appendChild(el('div', { className: 'conv-row' }, rowChildren));
       }
       convCard.appendChild(list);
       root.appendChild(convCard);
@@ -1371,9 +1410,6 @@
     }
     const q = new URLSearchParams();
     if (opts?.force) q.set('force', '1');
-    if (state.selectedConvId && state.selectedConvId !== 'auto') {
-      q.set('convId', state.selectedConvId);
-    }
     const suffix = q.toString() ? `?${q.toString()}` : '';
     const pending = requestJson(`/api/dashboard${suffix}`, { method: 'GET' })
       .then((data) => {
@@ -1400,9 +1436,7 @@
       const data = await requestJson('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...(state.selectedConvId && state.selectedConvId !== 'auto' ? { convId: state.selectedConvId } : {}),
-        }),
+        body: '{}',
       });
       renderAll(data);
     } finally {
@@ -1618,11 +1652,7 @@
         const verCtxSig = ver?.activeConvId
           ? `${ver.activeConvId}|${ver.activeUsedTokens || 0}|${ver.activeMaxContextTokens || 0}`
           : '';
-        const ctxChanged =
-          (state.selectedConvId === 'auto' && verCtxSig && verCtxSig !== state.lastContextSig) ||
-          (state.selectedConvId !== 'auto' &&
-            ver?.activeConvId === state.selectedConvId &&
-            verCtxSig !== state.lastContextSig);
+        const ctxChanged = Boolean(verCtxSig && verCtxSig !== state.lastContextSig);
         if ((typeof ver?.revision === 'number' && ver.revision !== state.lastRevision) || ctxChanged) {
           await loadDashboard().catch(() => {});
         }

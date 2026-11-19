@@ -308,6 +308,7 @@ export async function createDashboardService(options = {}) {
         responseTokens: Number(ctx?.responseTokens || 0),
         estimatedTokensUsed: Number(ctx?.estimatedTokensUsed || 0),
         source: ctx?.source || 'empty',
+        latestGeneration: ctx?.latestGeneration || null,
         isRunning: Boolean(traj?.isRunning),
         lastModifiedMs: Math.max(Number(localEntry?.lastModifiedMs || 0), Number(traj?.lastModifiedMs || 0)),
         lastUserViewMs: Number(traj?.lastUserViewMs || 0),

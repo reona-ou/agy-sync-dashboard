@@ -287,7 +287,7 @@ test('parseGenContextSnapshot and LocalUsageCollector extract current context us
     ]);
 
     const collector = new LocalUsageCollector({ conversationsDir: convDir, summariesDb });
-    await collector.collect();
+    const snap = await collector.collect();
 
     const uCtx = await collector.getConversationContext('conv-usage');
     assert.ok(uCtx?.contextInfo);
@@ -297,6 +297,15 @@ test('parseGenContextSnapshot and LocalUsageCollector extract current context us
     assert.equal(uCtx.contextInfo.usedTokens, 156000);
     assert.equal(uCtx.contextInfo.maxContextTokens, 512000);
     assert.equal(uCtx.contextInfo.estimatedTokensUsed, 148000);
+    assert.ok(uCtx.contextInfo.latestGeneration);
+    assert.equal(uCtx.contextInfo.latestGeneration.totalTokens, 156400);
+    assert.ok(uCtx.contextInfo.latestGeneration.tps > 0);
+
+    assert.equal(snap.recentConversations.length, 1);
+    assert.equal(snap.recentConversations[0].contextUsedTokens, 156000);
+    assert.equal(snap.recentConversations[0].maxContextTokens, 512000);
+    assert.equal(snap.recentConversations[0].displayName, 'Gemini 4 Hydrogen (High)');
+    assert.equal(snap.recentConversations[0].latestGeneration.totalTokens, 156400);
 
     const eCtx = await collector.getConversationContext('conv-est');
     assert.ok(eCtx?.contextInfo);
