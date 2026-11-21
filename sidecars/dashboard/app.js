@@ -53,8 +53,34 @@
       trendPeak: '峰值',
       vsPrevDay: '较昨日',
       recentTitle: '最近对话 (跨设备)',
-      devicesTitle: '参与合并的设备',
-      modelsTitle: '模型用量汇总 (跨设备)',
+      devicesTitle: '设备周期用量',
+      modelsTitle: '模型周期用量',
+      modelCountTag: (n) => `${n} 个模型`,
+      filterDeviceLabel: '设备',
+      filterModelLabel: '模型',
+      allDevicesOption: '全部设备',
+      allModelsOption: '全部模型',
+      noActiveModelsOption: '当前周期暂无有用量模型',
+      periodFilterAria: '用量统计周期',
+      period5h: '5h',
+      periodToday: '今日',
+      period7d: '7d',
+      periodAll: '全部',
+      periodAllChip: '累计',
+      periodHints: {
+        '5h': '近 5 小时滚动窗口',
+        today: '今日累计 (00:00 至今)',
+        '7d': '近 7 天滚动窗口',
+        all: '历史全部累计',
+      },
+      periodDesc: {
+        '5h': '近 5 小时',
+        today: '今日累计',
+        '7d': '近 7 天',
+        all: '历史累计',
+      },
+      noPeriodData: (label) => `${label}暂无用量记录，可切换上方周期查看。`,
+      noScopePeriodData: (scope, label) => `${scope} · ${label}暂无用量记录，可切换上方筛选或周期查看。`,
       noData: '暂无统计数据，请确认本地会话或同步目录。',
       currentDevice: '本机',
       staleBadge: '超过24小时未更新',
@@ -173,8 +199,34 @@
       trendPeak: 'Peak',
       vsPrevDay: 'vs yesterday',
       recentTitle: 'Recent Conversations (All Devices)',
-      devicesTitle: 'Synced Devices Breakdown',
-      modelsTitle: 'Usage by Model (Merged)',
+      devicesTitle: 'Device Usage by Period',
+      modelsTitle: 'Model Usage by Period',
+      modelCountTag: (n) => `${n} models`,
+      filterDeviceLabel: 'Device',
+      filterModelLabel: 'Model',
+      allDevicesOption: 'All devices',
+      allModelsOption: 'All models',
+      noActiveModelsOption: 'No models used in this period',
+      periodFilterAria: 'Usage period filter',
+      period5h: '5h',
+      periodToday: 'Today',
+      period7d: '7d',
+      periodAll: 'All',
+      periodAllChip: 'All',
+      periodHints: {
+        '5h': 'Rolling 5-hour window',
+        today: 'Today (since midnight)',
+        '7d': 'Rolling 7-day window',
+        all: 'All-time cumulative',
+      },
+      periodDesc: {
+        '5h': 'Last 5h',
+        today: 'Today',
+        '7d': 'Last 7d',
+        all: 'All-time',
+      },
+      noPeriodData: (label) => `No usage recorded for ${label}. Switch period above to inspect other ranges.`,
+      noScopePeriodData: (scope, label) => `${scope} · No usage recorded for ${label}. Switch filter or period above.`,
       noData: 'No token records found yet.',
       currentDevice: 'This device',
       staleBadge: 'Stale (>24h)',
@@ -293,8 +345,34 @@
       trendPeak: 'ピーク',
       vsPrevDay: '前日比',
       recentTitle: '最近の会話 (全デバイス)',
-      devicesTitle: '統合済みデバイス一覧',
-      modelsTitle: 'モデル別使用量 (統合)',
+      devicesTitle: 'デバイス別・期間別使用量',
+      modelsTitle: 'モデル別・期間別使用量',
+      modelCountTag: (n) => `${n} モデル`,
+      filterDeviceLabel: 'デバイス',
+      filterModelLabel: 'モデル',
+      allDevicesOption: '全デバイス',
+      allModelsOption: '全モデル',
+      noActiveModelsOption: 'この期間の使用モデルなし',
+      periodFilterAria: '集計期間の切り替え',
+      period5h: '5h',
+      periodToday: '本日',
+      period7d: '7d',
+      periodAll: '全期間',
+      periodAllChip: '累計',
+      periodHints: {
+        '5h': '直近5時間のロール集計',
+        today: '本日の累計 (0:00以降)',
+        '7d': '直近7日間のロール集計',
+        all: '全期間の累計',
+      },
+      periodDesc: {
+        '5h': '直近5時間',
+        today: '本日累計',
+        '7d': '直近7日間',
+        all: '全期間累計',
+      },
+      noPeriodData: (label) => `${label}の使用記録はありません。上の期間を切り替えて確認できます。`,
+      noScopePeriodData: (scope, label) => `${scope} · ${label}の使用記録はありません。上のフィルターまたは期間を切り替えてください。`,
       noData: '統計データがまだありません。ローカル会話または同期ディレクトリを確認してください。',
       currentDevice: 'この端末',
       staleBadge: '24時間以上未更新',
@@ -373,6 +451,10 @@
     lang: 'zh-CN',
     dashboard: null,
     selectedDateKey: null,
+    devicesPeriod: '5h',
+    devicesModel: 'all',
+    modelsPeriod: '5h',
+    modelsDevice: 'all',
     syncing: false,
     settingsDirty: false,
     selectedSyncMode: 'folder',
@@ -426,12 +508,6 @@
     return 0.2126 * lin(rgb.r) + 0.7152 * lin(rgb.g) + 0.0722 * lin(rgb.b);
   }
 
-  function contrastRatio(c1, c2) {
-    const l1 = luminance(c1);
-    const l2 = luminance(c2);
-    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-  }
-
   function syncHostTheme(hostThemeHint) {
     if (hostThemeHint !== undefined) {
       state.hostThemeHint = hostThemeHint;
@@ -440,16 +516,12 @@
     const root = document.documentElement;
     const cs = getComputedStyle(root);
     const bgRaw = cs.getPropertyValue('--background').trim();
-    const fgRaw = cs.getPropertyValue('--foreground').trim();
-    const primaryRaw = cs.getPropertyValue('--primary').trim();
 
-    const sig = `${bgRaw}|${fgRaw}|${primaryRaw}|${hint?.mode || ''}`;
+    const sig = `${bgRaw}|${hint?.mode || ''}`;
     if (sig === state.lastThemeSig && root.dataset.theme) return;
     state.lastThemeSig = sig;
 
     const bgParsed = parseCssColor(bgRaw);
-    const fgParsed = parseCssColor(fgRaw);
-    const primaryParsed = parseCssColor(primaryRaw);
 
     let isDark = true;
     if (bgParsed) {
@@ -463,36 +535,6 @@
     }
 
     root.dataset.theme = isDark ? 'dark' : 'light';
-
-    const resolvedBg = bgParsed ? bgParsed.css : isDark ? '#14161d' : '#f6f7fb';
-    const bgRef = bgParsed || (isDark ? { r: 20, g: 22, b: 29 } : { r: 246, g: 247, b: 251 });
-    const fgOk = fgParsed && contrastRatio(bgRef, fgParsed) >= 4.5;
-    const resolvedFg = fgOk ? fgParsed.css : isDark ? '#f1f3f9' : '#171923';
-
-    let resolvedAccent = isDark ? '#7c5cff' : '#5b46f6';
-    let onAccent = '#ffffff';
-    if (primaryParsed) {
-      const chroma = Math.max(primaryParsed.r, primaryParsed.g, primaryParsed.b) -
-        Math.min(primaryParsed.r, primaryParsed.g, primaryParsed.b);
-      if (chroma >= 24 && contrastRatio(bgRef, primaryParsed) >= 2.2) {
-        resolvedAccent = primaryParsed.css;
-        // Pick whichever label colour clears the accent by more: a mid-tone
-        // accent can fail white text without being light enough for dark ink.
-        const onWhite = contrastRatio(primaryParsed, { r: 255, g: 255, b: 255 });
-        const onInk = contrastRatio(primaryParsed, { r: 17, g: 19, b: 24 });
-        onAccent = onInk > onWhite ? '#111318' : '#ffffff';
-      }
-    }
-
-    root.style.setProperty('--agy-host-bg', resolvedBg);
-    root.style.setProperty('--agy-host-fg', resolvedFg);
-    root.style.setProperty('--agy-host-accent', resolvedAccent);
-    root.style.setProperty('--agy-host-on-accent', onAccent);
-
-    if (document.body) {
-      document.body.style.backgroundColor = resolvedBg;
-      document.body.style.color = resolvedFg;
-    }
   }
 
   function watchHostTheme() {
@@ -1211,109 +1253,464 @@
     }
   }
 
-  function renderDevices(data) {
-    const dict = t();
-    const root = document.getElementById('devices-root');
-    root.textContent = '';
+  const PERIOD_KEYS = ['5h', 'today', '7d', 'all'];
 
-    const conflicts = data.syncStatus?.conflictFiles || [];
-    if (conflicts.length > 0) {
-      root.appendChild(el('div', { className: 'notice', text: dict.conflictWarning(conflicts) }));
-    }
-
-    const card = el('article', { className: 'card' });
-    card.appendChild(
-      el('div', { className: 'card-head' }, [
-        el('h2', { className: 'card-title', text: dict.devicesTitle }),
-        el('span', { className: 'tag', text: String(data.merged.deviceCount) }),
-      ])
-    );
-
-    const devices = data.merged.devices || [];
-    if (!devices.length) {
-      card.appendChild(el('p', { className: 'empty-note', text: dict.noData }));
-      root.appendChild(card);
-      return;
-    }
-
-    const list = el('div', { className: 'bar-list' });
-    const now = Date.now();
-    for (const dev of devices) {
-      const isStale = dev.updatedAt && now - dev.updatedAt > 24 * 3600 * 1000;
-      const pct = Math.max(0, Math.min(100, Math.round(dev.shareRatio * 100)));
-      const row = el('div', { className: 'entity-row' }, [
-        el('div', { className: 'entity-top' }, [
-          el('div', { className: 'entity-title' }, [
-            el('span', { text: dev.deviceName, title: dev.deviceName }),
-            dev.isCurrent ? el('span', { className: 'tag accent', text: dict.currentDevice }) : null,
-            isStale ? el('span', { className: 'tag', text: dict.staleBadge }) : null,
-          ]),
-          el('span', { className: 'entity-val', text: fmtTokens(dev.totals.totalTokens) }),
-        ]),
-        el('div', { className: 'meter' }, [
-          el('div', { className: 'meter-fill', style: { width: `${Math.max(2, pct)}%` } }),
-        ]),
-        el('div', { className: 'entity-sub' }, [
-          el('span', { text: `${dict.todayShort} ${fmtTokens(dev.todayTokens)}` }),
-          el('span', { text: `${dict.share} ${fmtPct(dev.shareRatio)}` }),
-          el('span', { text: `${dict.cacheTok} ${fmtPct(dev.totals.cacheHitRate)}` }),
-          el('span', { text: `${dev.conversationCount} ${dict.convs}` }),
-          el('span', { text: `${dev.platform || ''} · ${fmtRelative(dev.updatedAt)}` }),
-        ]),
-      ]);
-      list.appendChild(row);
-    }
-    card.appendChild(list);
-    root.appendChild(card);
+  function getMergedPeriods(merged) {
+    if (merged?.periods) return merged.periods;
+    return {
+      '5h': { totalTokens: 0, generations: 0, cacheHitRate: 0 },
+      today: { ...(merged?.today || {}), cacheHitRate: 0 },
+      '7d': { totalTokens: 0, generations: 0, cacheHitRate: 0 },
+      all: merged?.totals || { totalTokens: 0, generations: 0, cacheHitRate: 0 },
+    };
   }
 
-  function renderModels(data) {
-    const dict = t();
-    const root = document.getElementById('models-root');
-    root.textContent = '';
+  function getPeriodBucket(entity, periodKey, fallbackAllBucket) {
+    if (entity?.periods?.[periodKey]) return entity.periods[periodKey];
+    if (periodKey === 'all') {
+      return fallbackAllBucket || entity?.totals || entity || { totalTokens: 0, generations: 0, cacheHitRate: 0, shareRatio: 0 };
+    }
+    if (periodKey === 'today') {
+      return {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        totalTokens: Number(entity?.todayTokens || 0),
+        generations: 0,
+        cacheHitRate: 0,
+        shareRatio: 0,
+      };
+    }
+    return {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 0,
+      generations: 0,
+      cacheHitRate: 0,
+      shareRatio: 0,
+    };
+  }
 
-    const card = el('article', { className: 'card' });
-    card.appendChild(
-      el('div', { className: 'card-head' }, [
-        el('h2', { className: 'card-title', text: dict.modelsTitle }),
-      ])
-    );
+  function periodTabLabel(dict, key, isChip = false) {
+    if (key === '5h') return dict.period5h;
+    if (key === 'today') return dict.periodToday;
+    if (key === '7d') return dict.period7d;
+    return isChip ? dict.periodAllChip : dict.periodAll;
+  }
 
-    const models = data.merged.models || [];
-    if (!models.length) {
-      card.appendChild(el('p', { className: 'empty-note', text: dict.noData }));
-      root.appendChild(card);
+  function rerenderPreservingFocus(root, renderBody, opts) {
+    const active = document.activeElement;
+    if (!opts?.fromUserAction && active && root.contains(active) && active.tagName === 'SELECT') {
       return;
     }
+    const focusedPeriod =
+      active && root.contains(active) ? active.getAttribute('data-period') : null;
+    const focusedId =
+      active && root.contains(active) && active.id ? active.id : null;
+    renderBody();
+    if (focusedPeriod) {
+      const nextBtn = root.querySelector(`.period-btn[data-period="${focusedPeriod}"]`);
+      if (nextBtn) nextBtn.focus({ preventScroll: true });
+    } else if (focusedId) {
+      const nextEl = document.getElementById(focusedId);
+      if (nextEl) nextEl.focus({ preventScroll: true });
+    }
+  }
 
-    const total = Math.max(1, data.merged.totals.totalTokens);
-    const list = el('div', { className: 'bar-list' });
-    for (const m of models) {
-      const share = m.totalTokens / total;
-      list.appendChild(
-        el('div', { className: 'entity-row' }, [
-          el('div', { className: 'entity-top' }, [
-            el('span', { className: 'entity-title' }, [
-              // inner span: text-overflow needs a block, and the row is a flex
-              // container once the name is wrapped in an element of its own
-              el('span', { text: m.displayName || m.modelId, title: m.displayName || m.modelId }),
-            ]),
-            el('span', { className: 'entity-val', text: fmtTokens(m.totalTokens) }),
-          ]),
-          el('div', { className: 'meter' }, [
-            el('div', { className: 'meter-fill', style: { width: `${Math.max(2, Math.round(share * 100))}%` } }),
-          ]),
-          el('div', { className: 'entity-sub' }, [
-            el('span', { text: `${dict.inTok} ${fmtTokens(m.inputTokens)}` }),
-            el('span', { text: `${dict.cacheTok} ${fmtTokens(m.cacheReadTokens)}` }),
-            el('span', { text: `${dict.outTok} ${fmtTokens(m.outputTokens)}` }),
-            el('span', { text: `${m.generations} ${dict.gens} · ${fmtPct(share)}` }),
-          ]),
-        ])
+  function buildFilterSelectRow({ id, label, options, value, onChange }) {
+    const select = el(
+      'select',
+      {
+        className: 'input filter-select',
+        id,
+      },
+      [
+        el('button', { type: 'button', className: 'select-trigger' }, [el('selectedcontent')]),
+        ...options.map((opt) =>
+          el('option', {
+            value: opt.value,
+            text: opt.label,
+            selected: opt.value === value ? '' : undefined,
+          })
+        ),
+      ]
+    );
+    select.value = value;
+    select.addEventListener('change', (e) => onChange(e.target.value));
+    return el('div', { className: 'filter-bar' }, [
+      el('label', { className: 'filter-label', for: id, text: label }),
+      select,
+    ]);
+  }
+
+  function buildPeriodSelector(mergedPeriods, activePeriod, onSelect) {
+    const dict = t();
+    const grid = el('div', {
+      className: 'period-grid',
+      role: 'group',
+      'aria-label': dict.periodFilterAria,
+    });
+    for (const pKey of PERIOD_KEYS) {
+      const b = mergedPeriods?.[pKey] || {};
+      const label = periodTabLabel(dict, pKey, false);
+      const hint = dict.periodHints?.[pKey] || label;
+      const isSelected = pKey === activePeriod;
+      const btn = el(
+        'button',
+        {
+          type: 'button',
+          className: 'period-btn',
+          'data-period': pKey,
+          'aria-pressed': String(isSelected),
+          title: `${hint} · ${Number(b.totalTokens || 0).toLocaleString()} tokens`,
+        },
+        [
+          el('span', { className: 'period-btn-label', text: label }),
+          el('span', { className: 'period-btn-val', text: fmtTokens(b.totalTokens || 0) }),
+        ]
+      );
+      btn.addEventListener('click', () => {
+        if (pKey !== activePeriod) onSelect(pKey);
+      });
+      grid.appendChild(btn);
+    }
+    return grid;
+  }
+
+  function buildPeriodMetaBar(mergedPeriods, activePeriod) {
+    const dict = t();
+    const b = mergedPeriods?.[activePeriod] || {};
+    const desc = dict.periodDesc?.[activePeriod] || periodTabLabel(dict, activePeriod, false);
+    const items = [
+      el('span', { className: 'period-meta-desc', text: desc }),
+      el('span', { text: `${Number(b.generations || 0)} ${dict.gens}` }),
+      el('span', { text: `${dict.cacheTok} ${fmtPct(b.cacheHitRate || 0)}` }),
+    ];
+    return el('div', { className: 'period-meta-bar' }, items);
+  }
+
+  function buildEntityPeriodsRow(entity, activePeriod, fallbackAllBucket) {
+    const dict = t();
+    const row = el('div', { className: 'entity-periods' });
+    for (const pKey of PERIOD_KEYS) {
+      const b = getPeriodBucket(entity, pKey, fallbackAllBucket);
+      const label = periodTabLabel(dict, pKey, true);
+      row.appendChild(
+        el('span', {
+          className: `entity-period-chip${pKey === activePeriod ? ' active' : ''}`,
+          text: `${label} ${fmtTokens(b.totalTokens || 0)}`,
+          title: `${dict.periodHints?.[pKey] || label}: ${Number(b.totalTokens || 0).toLocaleString()} tokens`,
+        })
       );
     }
-    card.appendChild(list);
-    root.appendChild(card);
+    return row;
+  }
+
+  function renderDevices(data, opts) {
+    const dict = t();
+    const root = document.getElementById('devices-root');
+    const activePeriod = PERIOD_KEYS.includes(state.devicesPeriod) ? state.devicesPeriod : '5h';
+    state.devicesPeriod = activePeriod;
+
+    rerenderPreservingFocus(
+      root,
+      () => {
+        root.textContent = '';
+
+        const conflicts = data.syncStatus?.conflictFiles || [];
+        if (conflicts.length > 0) {
+          root.appendChild(el('div', { className: 'notice', text: dict.conflictWarning(conflicts) }));
+        }
+
+        const devices = data.merged.devices || [];
+        const allModels = data.merged.models || [];
+        const mergedPeriods = getMergedPeriods(data.merged);
+
+        const card = el('article', { className: 'card' });
+        card.appendChild(
+          el('div', { className: 'card-head' }, [
+            el('h2', { className: 'card-title', text: dict.devicesTitle }),
+            el('span', { className: 'tag', text: dict.deviceCountTag(data.merged.deviceCount) }),
+          ])
+        );
+
+        if (!devices.length) {
+          card.appendChild(el('p', { className: 'empty-note', text: dict.noData }));
+          root.appendChild(card);
+          return;
+        }
+
+        // Model filter on Devices page: only live-display models with >0 usage in the active period.
+        const activePeriodModels = allModels
+          .map((m) => ({ model: m, bucket: getPeriodBucket(m, activePeriod, m) }))
+          .filter((item) => Number(item.bucket.totalTokens || 0) > 0)
+          .sort((a, b) => Number(b.bucket.totalTokens || 0) - Number(a.bucket.totalTokens || 0));
+
+        const selectedModelItem =
+          state.devicesModel !== 'all'
+            ? activePeriodModels.find((item) => item.model.modelId === state.devicesModel) || null
+            : null;
+        if (!selectedModelItem) {
+          state.devicesModel = 'all';
+        }
+        const selectedModel = selectedModelItem ? selectedModelItem.model : null;
+        const scopePeriods = selectedModel
+          ? getMergedPeriods({ periods: selectedModel.periods })
+          : mergedPeriods;
+
+        if (allModels.length) {
+          const allOptLabel = activePeriodModels.length
+            ? `${dict.allModelsOption} (${activePeriodModels.length}) · ${fmtTokens(mergedPeriods[activePeriod]?.totalTokens || 0)}`
+            : `${dict.allModelsOption} · ${dict.noActiveModelsOption}`;
+          const modelOptions = [
+            { value: 'all', label: allOptLabel },
+            ...activePeriodModels.map(({ model: m, bucket: mb }) => ({
+              value: m.modelId,
+              label: `${m.displayName || m.modelId} · ${fmtTokens(mb.totalTokens || 0)}`,
+            })),
+          ];
+          card.appendChild(
+            buildFilterSelectRow({
+              id: 'devices-model-select',
+              label: dict.filterModelLabel,
+              options: modelOptions,
+              value: state.devicesModel,
+              onChange: (nextModel) => {
+                state.devicesModel = nextModel;
+                if (state.dashboard) renderDevices(state.dashboard, { fromUserAction: true });
+              },
+            })
+          );
+        }
+
+        card.appendChild(
+          buildPeriodSelector(scopePeriods, activePeriod, (nextPeriod) => {
+            state.devicesPeriod = nextPeriod;
+            if (state.dashboard) renderDevices(state.dashboard, { fromUserAction: true });
+          })
+        );
+        card.appendChild(buildPeriodMetaBar(scopePeriods, activePeriod));
+
+        const periodTotal = Math.max(0, Number(scopePeriods?.[activePeriod]?.totalTokens || 0));
+        const getDevScopeEntity = (dev) =>
+          selectedModel ? dev.models?.[selectedModel.modelId] || null : dev;
+        const getDevFallbackAll = (dev) =>
+          selectedModel ? dev.models?.[selectedModel.modelId]?.periods?.all || null : dev.totals;
+
+        const sortedDevices = [...devices].sort((a, b) => {
+          const aTok = Number(getPeriodBucket(getDevScopeEntity(a), activePeriod, getDevFallbackAll(a)).totalTokens || 0);
+          const bTok = Number(getPeriodBucket(getDevScopeEntity(b), activePeriod, getDevFallbackAll(b)).totalTokens || 0);
+          if (bTok !== aTok) return bTok - aTok;
+          if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+          return Number(b.totals?.totalTokens || 0) - Number(a.totals?.totalTokens || 0);
+        });
+
+        const list = el('div', { className: 'bar-list' });
+        const now = Date.now();
+        for (const dev of sortedDevices) {
+          const isStale = dev.updatedAt && now - dev.updatedAt > 24 * 3600 * 1000;
+          const devEntity = getDevScopeEntity(dev);
+          const fallbackAll = getDevFallbackAll(dev);
+          const pBucket = getPeriodBucket(devEntity, activePeriod, fallbackAll);
+          const pTokens = Number(pBucket.totalTokens || 0);
+          const share = selectedModel
+            ? periodTotal > 0
+              ? pTokens / periodTotal
+              : 0
+            : typeof pBucket.shareRatio === 'number'
+              ? pBucket.shareRatio
+              : periodTotal > 0
+                ? pTokens / periodTotal
+                : 0;
+          const pct = pTokens > 0 ? Math.max(2, Math.min(100, Math.round(share * 100))) : 0;
+          const devMeta = [dev.platform, fmtRelative(dev.updatedAt)].filter(Boolean).join(' · ');
+
+          const subItems = [
+            el('span', { text: `${dict.share} ${fmtPct(share)}` }),
+            el('span', { text: `${dict.cacheTok} ${fmtPct(pBucket.cacheHitRate || 0)}` }),
+            el('span', { text: `${Number(pBucket.generations || 0)} ${dict.gens}` }),
+          ];
+          if (!selectedModel) {
+            subItems.push(el('span', { text: `${dev.conversationCount} ${dict.convs}` }));
+          }
+          if (devMeta) subItems.push(el('span', { text: devMeta }));
+
+          const row = el('div', { className: 'entity-row' }, [
+            el('div', { className: 'entity-top' }, [
+              el('div', { className: 'entity-title' }, [
+                el('span', { text: dev.deviceName, title: dev.deviceName }),
+                dev.isCurrent ? el('span', { className: 'tag accent', text: dict.currentDevice }) : null,
+                isStale ? el('span', { className: 'tag', text: dict.staleBadge }) : null,
+              ]),
+              el('span', {
+                className: 'entity-val',
+                text: fmtTokens(pTokens),
+                title: `${pTokens.toLocaleString()} tokens`,
+              }),
+            ]),
+            el('div', { className: 'meter' }, [
+              el('div', { className: 'meter-fill', style: { width: `${pct}%` } }),
+            ]),
+            el('div', { className: 'entity-sub' }, subItems),
+            buildEntityPeriodsRow(devEntity, activePeriod, fallbackAll),
+          ]);
+          list.appendChild(row);
+        }
+        card.appendChild(list);
+        root.appendChild(card);
+      },
+      opts
+    );
+  }
+
+  function renderModels(data, opts) {
+    const dict = t();
+    const root = document.getElementById('models-root');
+    const activePeriod = PERIOD_KEYS.includes(state.modelsPeriod) ? state.modelsPeriod : '5h';
+    state.modelsPeriod = activePeriod;
+
+    rerenderPreservingFocus(
+      root,
+      () => {
+        root.textContent = '';
+
+        const devices = data.merged.devices || [];
+        const mergedPeriods = getMergedPeriods(data.merged);
+        const allModels = data.merged.models || [];
+
+        const selectedDevice =
+          state.modelsDevice !== 'all'
+            ? devices.find((d) => d.deviceId === state.modelsDevice) || null
+            : null;
+        if (!selectedDevice) {
+          state.modelsDevice = 'all';
+        }
+
+        const scopePeriods = selectedDevice
+          ? getMergedPeriods({ periods: selectedDevice.periods, totals: selectedDevice.totals })
+          : mergedPeriods;
+        const rawModels = selectedDevice
+          ? Object.values(selectedDevice.models || {})
+          : allModels;
+        const periodTotal = Math.max(0, Number(scopePeriods?.[activePeriod]?.totalTokens || 0));
+
+        const activeModels = rawModels
+          .map((m) => ({ model: m, bucket: getPeriodBucket(m, activePeriod, m) }))
+          .filter((item) => Number(item.bucket.totalTokens || 0) > 0)
+          .sort((a, b) => Number(b.bucket.totalTokens || 0) - Number(a.bucket.totalTokens || 0));
+
+        const card = el('article', { className: 'card' });
+        card.appendChild(
+          el('div', { className: 'card-head' }, [
+            el('h2', { className: 'card-title', text: dict.modelsTitle }),
+            allModels.length ? el('span', { className: 'tag', text: dict.modelCountTag(activeModels.length) }) : null,
+          ])
+        );
+
+        if (!allModels.length) {
+          card.appendChild(el('p', { className: 'empty-note', text: dict.noData }));
+          root.appendChild(card);
+          return;
+        }
+
+        if (devices.length) {
+          const sortedDevices = [...devices].sort((a, b) => {
+            const aTok = Number(getPeriodBucket(a, activePeriod, a.totals).totalTokens || 0);
+            const bTok = Number(getPeriodBucket(b, activePeriod, b.totals).totalTokens || 0);
+            if (bTok !== aTok) return bTok - aTok;
+            if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+            return Number(b.totals?.totalTokens || 0) - Number(a.totals?.totalTokens || 0);
+          });
+          const deviceOptions = [
+            {
+              value: 'all',
+              label: `${dict.allDevicesOption} (${devices.length}) · ${fmtTokens(mergedPeriods[activePeriod]?.totalTokens || 0)}`,
+            },
+            ...sortedDevices.map((dev) => {
+              const dTok = Number(getPeriodBucket(dev, activePeriod, dev.totals).totalTokens || 0);
+              const name = dev.isCurrent ? `${dev.deviceName} (${dict.currentDevice})` : dev.deviceName;
+              return {
+                value: dev.deviceId,
+                label: `${name} · ${fmtTokens(dTok)}`,
+              };
+            }),
+          ];
+          card.appendChild(
+            buildFilterSelectRow({
+              id: 'models-device-select',
+              label: dict.filterDeviceLabel,
+              options: deviceOptions,
+              value: state.modelsDevice,
+              onChange: (nextDevice) => {
+                state.modelsDevice = nextDevice;
+                if (state.dashboard) renderModels(state.dashboard, { fromUserAction: true });
+              },
+            })
+          );
+        }
+
+        card.appendChild(
+          buildPeriodSelector(scopePeriods, activePeriod, (nextPeriod) => {
+            state.modelsPeriod = nextPeriod;
+            if (state.dashboard) renderModels(state.dashboard, { fromUserAction: true });
+          })
+        );
+        card.appendChild(buildPeriodMetaBar(scopePeriods, activePeriod));
+
+        if (!activeModels.length) {
+          const desc = dict.periodDesc?.[activePeriod] || periodTabLabel(dict, activePeriod, false);
+          const emptyMsg = selectedDevice
+            ? dict.noScopePeriodData(selectedDevice.deviceName, desc)
+            : dict.noPeriodData(desc);
+          card.appendChild(el('p', { className: 'empty-note', text: emptyMsg }));
+          root.appendChild(card);
+          return;
+        }
+
+        const list = el('div', { className: 'bar-list' });
+        for (const { model: m, bucket: pBucket } of activeModels) {
+          const pTokens = Number(pBucket.totalTokens || 0);
+          const share =
+            typeof pBucket.shareRatio === 'number'
+              ? pBucket.shareRatio
+              : periodTotal > 0
+                ? pTokens / periodTotal
+                : 0;
+          const pct = pTokens > 0 ? Math.max(2, Math.min(100, Math.round(share * 100))) : 0;
+
+          list.appendChild(
+            el('div', { className: 'entity-row' }, [
+              el('div', { className: 'entity-top' }, [
+                el('span', { className: 'entity-title' }, [
+                  // inner span: text-overflow needs a block, and the row is a flex
+                  // container once the name is wrapped in an element of its own
+                  el('span', { text: m.displayName || m.modelId, title: m.displayName || m.modelId }),
+                ]),
+                el('span', {
+                  className: 'entity-val',
+                  text: fmtTokens(pTokens),
+                  title: `${pTokens.toLocaleString()} tokens`,
+                }),
+              ]),
+              el('div', { className: 'meter' }, [
+                el('div', { className: 'meter-fill', style: { width: `${pct}%` } }),
+              ]),
+              el('div', { className: 'entity-sub' }, [
+                el('span', { text: `${dict.inTok} ${fmtTokens(pBucket.inputTokens || 0)}` }),
+                el('span', { text: `${dict.cacheTok} ${fmtTokens(pBucket.cacheReadTokens || 0)}` }),
+                el('span', { text: `${dict.outTok} ${fmtTokens(pBucket.outputTokens || 0)}` }),
+                el('span', { text: `${Number(pBucket.generations || 0)} ${dict.gens} · ${fmtPct(share)}` }),
+              ]),
+              buildEntityPeriodsRow(m, activePeriod, m),
+            ])
+          );
+        }
+        card.appendChild(list);
+        root.appendChild(card);
+      },
+      opts
+    );
   }
 
   function renderSettings(data, forceReset) {

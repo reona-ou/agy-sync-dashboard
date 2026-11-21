@@ -5,19 +5,69 @@ import { DatabaseSync } from 'node:sqlite';
 import { SLOT_MS, TIMELINE_RETENTION_MS, classifyModelFamily } from './forecast.mjs';
 
 /**
- * Known model enum fallbacks when proto field g1[19] (modelId) is omitted.
+ * Known model enum fallbacks when proto field g1[19] (modelId) or g1[21] (displayName) is omitted.
+ * MODEL_PLACEHOLDER_M<id> maps to 1000 + <id>.
  */
 const MODEL_ENUM_FALLBACK = {
-  1000: 'gemini-3-pro',
-  1001: 'gemini-3-flash',
-  1002: 'gemini-2.5-pro',
-  1003: 'gemini-2.5-flash',
-  1010: 'claude-sonnet-4.5',
-  1011: 'claude-sonnet-4.6',
-  1012: 'claude-opus-4.5',
-  1013: 'claude-opus-4.6',
-  1020: 'gpt-oss-120b',
+  1000: { modelId: 'gemini-3-pro', displayName: 'Gemini 3 Pro' },
+  1001: { modelId: 'gemini-3-flash', displayName: 'Gemini 3 Flash' },
+  1002: { modelId: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
+  1003: { modelId: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
+  1010: { modelId: 'claude-sonnet-4.5', displayName: 'Claude Sonnet 4.5' },
+  1011: { modelId: 'claude-sonnet-4.6', displayName: 'Claude Sonnet 4.6' },
+  1012: { modelId: 'claude-opus-4.5', displayName: 'Claude Opus 4.5' },
+  1013: { modelId: 'claude-opus-4.6', displayName: 'Claude Opus 4.6' },
+  1020: { modelId: 'gpt-oss-120b', displayName: 'GPT-OSS 120B' },
+  1318: { modelId: 'gemini-3.8-flash-n-high', displayName: 'Gemini 3.8 Flash (High)', tier: 'high' },
+  1319: { modelId: 'gemini-3.8-flash-n-medium', displayName: 'Gemini 3.8 Flash (Medium)', tier: 'medium' },
+  1320: { modelId: 'gemini-3.8-flash-n-low', displayName: 'Gemini 3.8 Flash (Low)', tier: 'low' },
+  1400: { modelId: 'claude-opus-5-5-low', displayName: 'Claude Opus 5.5 (Low)', tier: 'low' },
+  1401: { modelId: 'claude-opus-5-5-medium', displayName: 'Claude Opus 5.5 (Medium)', tier: 'medium' },
+  1402: { modelId: 'claude-opus-5-5-high', displayName: 'Claude Opus 5.5 (High)', tier: 'high' },
+  1403: { modelId: 'claude-sonnet-5-5-low', displayName: 'Claude Sonnet 5.5 (Low)', tier: 'low' },
+  1404: { modelId: 'claude-sonnet-5-5-medium', displayName: 'Claude Sonnet 5.5 (Medium)', tier: 'medium' },
+  1405: { modelId: 'claude-sonnet-5-5-high', displayName: 'Claude Sonnet 5.5 (High)', tier: 'high' },
+  1417: { modelId: 'gemini-4-argon-high', displayName: 'Gemini 4 Argon (High)', tier: 'high' },
+  1418: { modelId: 'gemini-4-argon-medium', displayName: 'Gemini 4 Argon (Medium)', tier: 'medium' },
+  1419: { modelId: 'gemini-4-argon-low', displayName: 'Gemini 4 Argon (Low)', tier: 'low' },
+  1525: { modelId: 'gemini-4-hydrogen-high', displayName: 'Gemini 4 Hydrogen (High)', tier: 'high' },
+  1526: { modelId: 'gemini-4-hydrogen-medium', displayName: 'Gemini 4 Hydrogen (Medium)', tier: 'medium' },
+  1527: { modelId: 'gemini-4-hydrogen-low', displayName: 'Gemini 4 Hydrogen (Low)', tier: 'low' },
+  1528: { modelId: 'gemini-4-hydrogen-xhigh', displayName: 'Gemini 4 Hydrogen (XHigh)', tier: 'xhigh' },
+  1530: { modelId: 'gemini-4-hydrogen-tiered-high', displayName: 'Gemini 4 Hydrogen (Tiered High)', tier: 'high' },
+  1532: { modelId: 'gemini-4-neon-high', displayName: 'Gemini 4 Neon (High)', tier: 'high' },
+  1533: { modelId: 'gemini-4-neon-medium', displayName: 'Gemini 4 Neon (Medium)', tier: 'medium' },
+  1534: { modelId: 'gemini-4-neon-low', displayName: 'Gemini 4 Neon (Low)', tier: 'low' },
+  1535: { modelId: 'gemini-4-neon-xhigh', displayName: 'Gemini 4 Neon (XHigh)', tier: 'xhigh' },
 };
+
+const TIER_RE = /\(\s*(tiered[\s-]+)?(extra[\s-]+high|very[\s-]+high|xhigh|high|medium|med|low|minimal|min|max)\s*\)\s*$/i;
+const ID_HAS_TIER_RE = /(?:^|[-_])(?:tiered-(?:xhigh|high|medium|low|minimal)|extra-high|xhigh|high|medium|low|minimal|max)$/i;
+
+function normalizeTierToken(raw) {
+  const s = String(raw || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  if (s === 'extra-high' || s === 'very-high') return 'xhigh';
+  if (s === 'med') return 'medium';
+  if (s === 'min') return 'minimal';
+  return s;
+}
+
+function extractTierSuffix(displayName) {
+  const m = String(displayName || '').trim().match(TIER_RE);
+  if (!m) return '';
+  const tieredPrefix = m[1] ? 'tiered-' : '';
+  return `${tieredPrefix}${normalizeTierToken(m[2])}`;
+}
+
+function slugifyDisplayName(displayName) {
+  return String(displayName || '')
+    .toLowerCase()
+    .replace(/\(\s*(?:extra[\s-]+high|very[\s-]+high|xhigh)\s*\)/g, ' xhigh ')
+    .replace(/[()[\]]/g, ' ')
+    .trim()
+    .replace(/[^a-z0-9.]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
 
 /**
  * Read an unsigned varint from a Buffer starting at offset.
@@ -173,16 +223,38 @@ export function parseStepMetadata(blob) {
 }
 
 /**
- * Normalize model display name and identifier.
+ * Normalize model display name and identifier, preserving reasoning/effort tiers (e.g. high vs xhigh).
  */
 export function resolveModelMeta(modelId, displayName, modelEnum) {
-  const cleanId = (modelId || '').trim();
-  const cleanDisplay = (displayName || '').trim();
-  if (cleanId && cleanDisplay) return { modelId: cleanId, displayName: cleanDisplay };
-  if (cleanId) return { modelId: cleanId, displayName: cleanId };
-  if (cleanDisplay) return { modelId: cleanDisplay.toLowerCase().replace(/\s+/g, '-'), displayName: cleanDisplay };
-  const mapped = MODEL_ENUM_FALLBACK[modelEnum];
-  if (mapped) return { modelId: mapped, displayName: mapped };
+  const cleanId = String(modelId || '').trim();
+  const cleanDisplay = String(displayName || '').trim();
+  const mapped = MODEL_ENUM_FALLBACK[modelEnum] || null;
+  const displayTier = extractTierSuffix(cleanDisplay);
+  const tier = displayTier || mapped?.tier || '';
+
+  if (cleanId) {
+    let resolvedId = cleanId;
+    if (tier && !ID_HAS_TIER_RE.test(cleanId)) {
+      resolvedId = `${cleanId}-${tier}`;
+    }
+    let resolvedDisplay = cleanDisplay || mapped?.displayName || resolvedId;
+    if (/-tiered-/i.test(resolvedId) && !/tiered/i.test(resolvedDisplay)) {
+      resolvedDisplay = TIER_RE.test(resolvedDisplay)
+        ? resolvedDisplay.replace(TIER_RE, (_, _p, lvl) => `(Tiered ${lvl})`)
+        : `${resolvedDisplay} (Tiered)`;
+    }
+    return { modelId: resolvedId, displayName: resolvedDisplay };
+  }
+
+  if (cleanDisplay) {
+    if (mapped && mapped.displayName.toLowerCase() === cleanDisplay.toLowerCase()) {
+      return { modelId: mapped.modelId, displayName: cleanDisplay };
+    }
+    const slug = slugifyDisplayName(cleanDisplay) || (modelEnum > 0 ? `model-${modelEnum}` : 'unknown');
+    return { modelId: slug, displayName: cleanDisplay };
+  }
+
+  if (mapped) return { modelId: mapped.modelId, displayName: mapped.displayName };
   if (modelEnum > 0) return { modelId: `model-${modelEnum}`, displayName: `Model #${modelEnum}` };
   return { modelId: 'unknown', displayName: 'Unknown' };
 }
@@ -767,6 +839,7 @@ export class LocalUsageCollector {
     const byDate = Object.create(null);
     const byModel = Object.create(null);
     const bySlot = Object.create(null);
+    const bySlotModel = Object.create(null);
     const slotCutoffMs = Date.now() - TIMELINE_RETENTION_MS;
     let latestGen = null;
 
@@ -787,6 +860,12 @@ export class LocalUsageCollector {
         sb.totalTokens += gen.totalTokens;
         sb.nonCacheTokens += gen.inputTokens + gen.outputTokens;
         sb.generations += 1;
+
+        if (!bySlotModel[slotKey]) bySlotModel[slotKey] = Object.create(null);
+        if (!bySlotModel[slotKey][gen.modelId]) {
+          bySlotModel[slotKey][gen.modelId] = emptyBucket();
+        }
+        addToBucket(bySlotModel[slotKey][gen.modelId], gen);
       }
 
       if (!byModel[gen.modelId]) {
@@ -828,6 +907,7 @@ export class LocalUsageCollector {
       byDate,
       byModel,
       bySlot,
+      bySlotModel,
       recentConversations,
     };
 

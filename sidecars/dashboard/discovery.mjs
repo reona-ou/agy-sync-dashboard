@@ -239,10 +239,62 @@ async function listStandaloneLanguageServers(expectedHints) {
   return rows.map((r) => ({ ...r, ports: ports.get(r.pid) || [] }));
 }
 
+async function readHubDiscoveryFiles(daemonDir) {
+  if (!daemonDir) return [];
+  let entries;
+  try {
+    entries = await readdir(daemonDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const hubs = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const full = join(daemonDir, entry.name);
+    try {
+      const [info, raw] = await Promise.all([stat(full).catch(() => null), readFile(full, 'utf8')]);
+      const parsed = JSON.parse(raw.replace(/^\uFEFF/, ''));
+      const pid = Number(parsed?.pid);
+      const port = Number(parsed?.httpPort);
+      const csrf = typeof parsed?.csrfToken === 'string' ? parsed.csrfToken.trim() : '';
+      if (!validPid(pid) || !validPort(port) || !csrf) continue;
+      hubs.push({ pid, port, csrf, mtimeMs: info?.mtimeMs ?? 0 });
+    } catch {
+      // ignore corrupt/unreadable discovery files
+    }
+  }
+  hubs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return hubs;
+}
+
+async function resolveEnvEndpoint(env, probeFn) {
+  const rawAddr = String(env?.ANTIGRAVITY_LS_ADDRESS || '').trim().replace(/^https?:\/\//i, '');
+  const csrf = String(env?.ANTIGRAVITY_CSRF_TOKEN || '').trim();
+  if (!rawAddr || !csrf) return null;
+  const ep = parseEndpoint(rawAddr);
+  const port = Number(ep?.port);
+  if (!ep || !isLoopbackOrAny(ep.address) || !validPort(port)) return null;
+  if (!(await probeFn(port))) return null;
+  return { pid: null, port, csrf };
+}
+
 /**
  * Discover the active standalone Antigravity language_server endpoint and CSRF token.
  */
-export async function discoverLanguageServer(paths = resolvePaths()) {
+export async function discoverLanguageServer(paths = resolvePaths(), options = {}) {
+  const probeFn = options.probePort || probePort;
+  const listProcs = options.listProcesses || listStandaloneLanguageServers;
+  const defaultPaths = options.env !== undefined ? null : resolvePaths();
+  const useProcessEnv =
+    options.env === undefined &&
+    (!paths || !paths.antigravityData || paths.antigravityData === defaultPaths?.antigravityData);
+  const envToCheck = options.env !== undefined ? options.env : useProcessEnv ? process.env : null;
+
+  if (envToCheck) {
+    const envEndpoint = await resolveEnvEndpoint(envToCheck, probeFn);
+    if (envEndpoint) return envEndpoint;
+  }
+
   const logs = [];
   for (const file of paths.logCandidates || []) {
     try {
@@ -256,10 +308,21 @@ export async function discoverLanguageServer(paths = resolvePaths()) {
     }
   }
   logs.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  const hints = [...new Set(logs.flatMap((l) => l.ports))];
-  const processes = await listStandaloneLanguageServers(hints);
+
+  const daemonDir = paths.daemonDir || (paths.antigravityData ? join(paths.antigravityData, 'daemon') : '');
+  const hubs = await readHubDiscoveryFiles(daemonDir);
+  const hints = [...new Set([...logs.flatMap((l) => l.ports), ...hubs.map((h) => h.port)])];
+  const processes = await listProcs(hints);
   if (!processes.length) {
     throw new Error('未检测到运行中的 Antigravity 语言服务');
+  }
+
+  for (const hub of hubs) {
+    const proc = processes.find((p) => p.pid === hub.pid);
+    if (!proc) continue;
+    if (proc.ports.includes(hub.port) || (await probeFn(hub.port))) {
+      return { pid: proc.pid, port: hub.port, csrf: hub.csrf };
+    }
   }
 
   for (const entry of logs) {

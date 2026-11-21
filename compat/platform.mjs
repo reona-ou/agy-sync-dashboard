@@ -53,6 +53,7 @@ export function resolvePaths({ platform = process.platform, home = homedir(), en
     antigravityData,
     conversationsDir: join(antigravityData, 'conversations'),
     summariesDb: join(antigravityData, 'conversation_summaries.db'),
+    daemonDir: join(antigravityData, 'daemon'),
     pluginConfig: join(home, '.gemini', 'config', 'config.json'),
     pluginDataDir,
     profile,

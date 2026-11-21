@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { request } from 'node:http';
+import { resolveModelMeta } from './collector.mjs';
 import { discoverLanguageServer } from './discovery.mjs';
 
 const RPC_SERVICE = '/exa.language_server_pb.LanguageServerService/';
@@ -202,8 +203,12 @@ export function parseRpcGeneratorContext(response) {
     const ctxWin = cm.chatStartMetadata?.contextWindowMetadata || {};
     const estimatedTokensUsed = Number(ctxWin.estimatedTokensUsed || 0);
     const maxContextTokens = Number(ctxWin.maxContextTokens || 0);
-    const modelId = String(cm.responseModel || cm.model || '').trim() || 'unknown';
-    const displayName = String(cm.modelDisplayName || modelId);
+    const rawResponseModel = String(cm.responseModel || '').trim();
+    const rawPlaceholder = String(cm.model || '').trim();
+    const phMatch = rawPlaceholder.match(/^MODEL_PLACEHOLDER_M(\d+)$/i);
+    const modelEnum = phMatch ? 1000 + Number(phMatch[1]) : 0;
+    const rawModelId = rawResponseModel || (phMatch ? '' : rawPlaceholder);
+    const { modelId, displayName } = resolveModelMeta(rawModelId, cm.modelDisplayName || '', modelEnum);
     return {
       modelId,
       displayName,

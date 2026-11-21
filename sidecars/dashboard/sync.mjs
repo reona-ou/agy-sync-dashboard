@@ -5,10 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectSyncCandidates, readJsonSafe, resolvePaths } from '../../compat/platform.mjs';
 import { LocalUsageCollector, toLocalDateKey } from './collector.mjs';
-import { classifyModelFamily } from './forecast.mjs';
+import { SLOT_MS, WINDOW_5H_MS, WINDOW_7D_MS, classifyModelFamily } from './forecast.mjs';
 import { WebDavSyncClient, normalizeWebDavConfig, redactWebDavConfig } from './webdav.mjs';
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
+export const USAGE_PERIODS = ['5h', 'today', '7d', 'all'];
 export const VALID_SYNC_MODES = ['folder', 'webdav', 'both', 'local-only'];
 export const SUPPORTED_LANGUAGES = ['zh-CN', 'en', 'ja'];
 const DEFAULT_SYNC_INTERVAL_MS = 30_000;
@@ -71,6 +72,209 @@ function addBucket(target, source) {
   target.generations += Number(source.generations || 0);
 }
 
+function addScaledBucket(target, source, ratio = 1) {
+  if (!source || ratio <= 0) return;
+  if (ratio >= 0.999999) {
+    addBucket(target, source);
+    return;
+  }
+  target.inputTokens += Math.round(Number(source.inputTokens || 0) * ratio);
+  target.outputTokens += Math.round(Number(source.outputTokens || 0) * ratio);
+  target.cacheReadTokens += Math.round(Number(source.cacheReadTokens || 0) * ratio);
+  target.cacheWriteTokens += Math.round(Number(source.cacheWriteTokens || 0) * ratio);
+  target.thinkingTokens += Math.round(Number(source.thinkingTokens || 0) * ratio);
+  target.totalTokens += Math.round(Number(source.totalTokens || 0) * ratio);
+  target.generations += Math.round(Number(source.generations || 0) * ratio);
+}
+
+function computeCacheHitRate(bucket) {
+  const denom = Number(bucket?.inputTokens || 0) + Number(bucket?.cacheReadTokens || 0);
+  return denom > 0 ? Number((Number(bucket?.cacheReadTokens || 0) / denom).toFixed(4)) : 0;
+}
+
+function emptyPeriodBuckets() {
+  return {
+    '5h': emptyBucket(),
+    today: emptyBucket(),
+    '7d': emptyBucket(),
+    all: emptyBucket(),
+  };
+}
+
+function finalizePeriodBucket(bucket, periodTotalTokens) {
+  const b = bucket || emptyBucket();
+  const totalTokens = Number(b.totalTokens || 0);
+  return {
+    ...b,
+    cacheHitRate: computeCacheHitRate(b),
+    shareRatio: periodTotalTokens > 0 ? Number((totalTokens / periodTotalTokens).toFixed(4)) : 0,
+  };
+}
+
+function resolveTodayStartMs(todayKey, nowMs) {
+  const parsed = Date.parse(`${todayKey}T00:00:00`);
+  if (Number.isFinite(parsed)) return parsed;
+  const d = new Date(nowMs);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function computeSlotOverlapRatio(slotIdx, winStartMs, nowMs) {
+  if (!Number.isFinite(slotIdx)) return 0;
+  const slotStart = slotIdx * SLOT_MS;
+  const slotEnd = slotStart + SLOT_MS;
+  if (slotEnd <= winStartMs || slotStart >= nowMs) return 0;
+  // Events in the current active slot occurred at or before nowMs, not in the future.
+  const overlapStart = Math.max(winStartMs, slotStart);
+  const overlap = slotEnd - overlapStart;
+  return overlap > 0 ? Math.min(1, overlap / SLOT_MS) : 0;
+}
+
+function buildModelWeightList(byModel) {
+  const entries = Object.entries(byModel || {});
+  const total = entries.reduce((sum, [, mb]) => sum + Number(mb?.totalTokens || 0), 0);
+  if (total <= 0) return [];
+  return entries
+    .map(([modelId, mb]) => [modelId, Number(mb?.totalTokens || 0) / total])
+    .filter(([, w]) => w > 0);
+}
+
+function computeDevicePeriodData(loc, nowMs, todayKey, todayStartMs) {
+  const devPeriods = emptyPeriodBuckets();
+  const modelPeriods = new Map();
+  const ensureModel = (modelId) => {
+    if (!modelPeriods.has(modelId)) modelPeriods.set(modelId, emptyPeriodBuckets());
+    return modelPeriods.get(modelId);
+  };
+
+  addBucket(devPeriods.all, loc.totals);
+  for (const [modelId, mBucket] of Object.entries(loc.byModel || {})) {
+    addBucket(ensureModel(modelId).all, mBucket);
+  }
+
+  const windowStarts = {
+    '5h': nowMs - WINDOW_5H_MS,
+    today: todayStartMs,
+    '7d': nowMs - WINDOW_7D_MS,
+  };
+
+  if (loc.bySlotModel && typeof loc.bySlotModel === 'object') {
+    for (const [slotKey, modelMap] of Object.entries(loc.bySlotModel)) {
+      const slotIdx = Number(slotKey);
+      if (!Number.isFinite(slotIdx)) continue;
+      for (const pKey of ['5h', 'today', '7d']) {
+        const ratio = computeSlotOverlapRatio(slotIdx, windowStarts[pKey], nowMs);
+        if (ratio <= 0) continue;
+        for (const [modelId, mSlot] of Object.entries(modelMap || {})) {
+          addScaledBucket(devPeriods[pKey], mSlot, ratio);
+          addScaledBucket(ensureModel(modelId)[pKey], mSlot, ratio);
+        }
+      }
+    }
+    return { devPeriods, modelPeriods };
+  }
+
+  const allWeights = buildModelWeightList(loc.byModel);
+
+  if (loc.bySlot && typeof loc.bySlot === 'object' && Object.keys(loc.bySlot).length > 0) {
+    const inTok = Number(loc.totals?.inputTokens || 0);
+    const outTok = Number(loc.totals?.outputTokens || 0);
+    const inOutSum = inTok + outTok;
+    const inShare = inOutSum > 0 ? inTok / inOutSum : 1;
+
+    const famWeights = Object.create(null);
+    const famSums = Object.create(null);
+    for (const [modelId, mb] of Object.entries(loc.byModel || {})) {
+      const fam = classifyModelFamily(modelId, mb?.displayName);
+      const tok = Number(mb?.totalTokens || 0);
+      if (tok <= 0) continue;
+      if (!famWeights[fam]) famWeights[fam] = [];
+      famWeights[fam].push([modelId, tok]);
+      famSums[fam] = (famSums[fam] || 0) + tok;
+    }
+
+    const toFullBucket = (sb) => {
+      const tot = Number(sb?.totalTokens || 0);
+      const nonCache = Number(sb?.nonCacheTokens || 0);
+      const inputTokens = Math.round(nonCache * inShare);
+      const outputTokens = Math.max(0, nonCache - inputTokens);
+      return {
+        inputTokens,
+        outputTokens,
+        cacheReadTokens: Math.max(0, tot - nonCache),
+        cacheWriteTokens: 0,
+        thinkingTokens: 0,
+        totalTokens: tot,
+        generations: Number(sb?.generations || 0),
+      };
+    };
+
+    const hasTodayDate = Boolean(loc.byDate && Object.hasOwn(loc.byDate, todayKey));
+    if (hasTodayDate) {
+      addBucket(devPeriods.today, loc.byDate[todayKey]);
+      for (const [modelId, w] of allWeights) {
+        addScaledBucket(ensureModel(modelId).today, loc.byDate[todayKey], w);
+      }
+    }
+
+    const pKeys = hasTodayDate ? ['5h', '7d'] : ['5h', 'today', '7d'];
+    for (const [slotKey, famMap] of Object.entries(loc.bySlot)) {
+      const slotIdx = Number(slotKey);
+      if (!Number.isFinite(slotIdx)) continue;
+      for (const pKey of pKeys) {
+        const ratio = computeSlotOverlapRatio(slotIdx, windowStarts[pKey], nowMs);
+        if (ratio <= 0) continue;
+        for (const [fam, sb] of Object.entries(famMap || {})) {
+          const full = toFullBucket(sb);
+          addScaledBucket(devPeriods[pKey], full, ratio);
+          const fList = famWeights[fam];
+          const fSum = famSums[fam] || 0;
+          if (fList && fSum > 0) {
+            for (const [modelId, mTok] of fList) {
+              addScaledBucket(ensureModel(modelId)[pKey], full, ratio * (mTok / fSum));
+            }
+          }
+        }
+      }
+    }
+    return { devPeriods, modelPeriods };
+  }
+
+  // Fallback for legacy daily-only snapshots (no bySlotModel or bySlot)
+  if (loc.byDate?.[todayKey]) {
+    addBucket(devPeriods.today, loc.byDate[todayKey]);
+    for (const [modelId, w] of allWeights) {
+      addScaledBucket(ensureModel(modelId).today, loc.byDate[todayKey], w);
+    }
+  }
+
+  for (const [dateKey, dBucket] of Object.entries(loc.byDate || {})) {
+    const dayStart = Date.parse(`${dateKey}T00:00:00`);
+    if (!Number.isFinite(dayStart)) continue;
+    const dayEnd = dayStart + 24 * 3600_000;
+    for (const pKey of ['5h', '7d']) {
+      const winStart = windowStarts[pKey];
+      if (dayEnd <= winStart || dayStart >= nowMs) continue;
+      let ratio;
+      if (dayStart <= nowMs && nowMs < dayEnd) {
+        const elapsed = Math.max(1, nowMs - dayStart);
+        const overlap = Math.max(0, nowMs - Math.max(winStart, dayStart));
+        ratio = Math.min(1, overlap / elapsed);
+      } else {
+        const overlap = Math.max(0, dayEnd - Math.max(winStart, dayStart));
+        ratio = Math.min(1, overlap / (24 * 3600_000));
+      }
+      if (ratio <= 0) continue;
+      addScaledBucket(devPeriods[pKey], dBucket, ratio);
+      for (const [modelId, w] of allWeights) {
+        addScaledBucket(ensureModel(modelId)[pKey], dBucket, ratio * w);
+      }
+    }
+  }
+
+  return { devPeriods, modelPeriods };
+}
+
 async function renameWithRetry(src, dest, retries = 3) {
   for (let i = 0; i <= retries; i++) {
     try {
@@ -86,6 +290,13 @@ async function renameWithRetry(src, dest, retries = 3) {
   }
 }
 
+function pickDisplayName(current, candidate, modelId) {
+  if (!candidate) return current || modelId;
+  if (!current || current === modelId) return candidate;
+  if (candidate === modelId) return current;
+  return candidate.length > current.length ? candidate : current;
+}
+
 /**
  * Pure aggregation across multiple valid device snapshots.
  * Sums metrics across devices without overwriting peer data.
@@ -96,11 +307,15 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
   );
 
   const todayKey = toLocalDateKey(nowMs);
+  const todayStartMs = resolveTodayStartMs(todayKey, nowMs);
   const mergedTotals = emptyBucket();
+  const mergedPeriods = emptyPeriodBuckets();
   let conversationCount = 0;
 
   const byDateMap = new Map();
   const byModelMap = new Map();
+  const devPeriodsMap = new WeakMap();
+  const devModelPeriodsMap = new WeakMap();
   const bySlot = Object.create(null);
   const legacyByDate = Object.create(null);
   const allRecent = [];
@@ -109,6 +324,13 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
     const loc = snap.local;
     addBucket(mergedTotals, loc.totals);
     conversationCount += Number(loc.conversationCount || 0);
+
+    const { devPeriods, modelPeriods } = computeDevicePeriodData(loc, nowMs, todayKey, todayStartMs);
+    devPeriodsMap.set(snap, devPeriods);
+    devModelPeriodsMap.set(snap, modelPeriods);
+    for (const pKey of USAGE_PERIODS) {
+      addBucket(mergedPeriods[pKey], devPeriods[pKey]);
+    }
 
     for (const [dateKey, bucket] of Object.entries(loc.byDate || {})) {
       if (!byDateMap.has(dateKey)) byDateMap.set(dateKey, emptyBucket());
@@ -157,19 +379,29 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
       }
     }
 
-    for (const [modelId, mBucket] of Object.entries(loc.byModel || {})) {
+    const modelIds = new Set([
+      ...Object.keys(loc.byModel || {}),
+      ...modelPeriods.keys(),
+    ]);
+    for (const modelId of modelIds) {
+      const mBucket = loc.byModel?.[modelId];
       if (!byModelMap.has(modelId)) {
         byModelMap.set(modelId, {
           modelId,
-          displayName: mBucket.displayName || modelId,
+          displayName: mBucket?.displayName || modelId,
           ...emptyBucket(),
+          periods: emptyPeriodBuckets(),
         });
       }
       const dst = byModelMap.get(modelId);
-      if (mBucket.displayName && mBucket.displayName.length > dst.displayName.length) {
-        dst.displayName = mBucket.displayName;
+      dst.displayName = pickDisplayName(dst.displayName, mBucket?.displayName, modelId);
+      if (mBucket) addBucket(dst, mBucket);
+      const mp = modelPeriods.get(modelId);
+      if (mp) {
+        for (const pKey of USAGE_PERIODS) {
+          addBucket(dst.periods[pKey], mp[pKey]);
+        }
       }
-      addBucket(dst, mBucket);
     }
 
     for (const conv of loc.recentConversations || []) {
@@ -181,8 +413,7 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
     }
   }
 
-  const cacheDenom = mergedTotals.inputTokens + mergedTotals.cacheReadTokens;
-  const cacheHitRate = cacheDenom > 0 ? Number((mergedTotals.cacheReadTokens / cacheDenom).toFixed(4)) : 0;
+  const cacheHitRate = computeCacheHitRate(mergedTotals);
 
   const byDate = Object.create(null);
   const sortedDates = Array.from(byDateMap.keys()).sort();
@@ -192,15 +423,55 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
 
   const todayBucket = byDate[todayKey] || emptyBucket();
 
-  const models = Array.from(byModelMap.values()).sort((a, b) => b.totalTokens - a.totalTokens);
+  const finalMergedPeriods = Object.create(null);
+  for (const pKey of USAGE_PERIODS) {
+    finalMergedPeriods[pKey] = finalizePeriodBucket(mergedPeriods[pKey], mergedPeriods[pKey].totalTokens);
+  }
+
+  const models = Array.from(byModelMap.values())
+    .map((m) => {
+      const finalizedPeriods = Object.create(null);
+      for (const pKey of USAGE_PERIODS) {
+        finalizedPeriods[pKey] = finalizePeriodBucket(m.periods[pKey], mergedPeriods[pKey].totalTokens);
+      }
+      return {
+        ...m,
+        periods: finalizedPeriods,
+      };
+    })
+    .sort((a, b) => b.totalTokens - a.totalTokens);
   const totalMergedTokens = mergedTotals.totalTokens;
 
   const devices = valid
     .map((snap) => {
       const devTotal = Number(snap.local.totals.totalTokens || 0);
       const devToday = Number(snap.local.byDate?.[todayKey]?.totalTokens || 0);
-      const cDenom = Number(snap.local.totals.inputTokens || 0) + Number(snap.local.totals.cacheReadTokens || 0);
-      const cRate = cDenom > 0 ? Number((Number(snap.local.totals.cacheReadTokens || 0) / cDenom).toFixed(4)) : 0;
+      const cRate = computeCacheHitRate(snap.local.totals);
+      const rawPeriods = devPeriodsMap.get(snap) || emptyPeriodBuckets();
+      const finalizedPeriods = Object.create(null);
+      for (const pKey of USAGE_PERIODS) {
+        finalizedPeriods[pKey] = finalizePeriodBucket(rawPeriods[pKey], mergedPeriods[pKey].totalTokens);
+      }
+      const rawModelPeriods = devModelPeriodsMap.get(snap);
+      const devModels = Object.create(null);
+      if (rawModelPeriods) {
+        for (const [modelId, mp] of rawModelPeriods.entries()) {
+          const mPeriods = Object.create(null);
+          for (const pKey of USAGE_PERIODS) {
+            mPeriods[pKey] = finalizePeriodBucket(mp[pKey], rawPeriods[pKey].totalTokens);
+          }
+          const displayName = pickDisplayName(
+            byModelMap.get(modelId)?.displayName,
+            snap.local.byModel?.[modelId]?.displayName,
+            modelId
+          );
+          devModels[modelId] = {
+            modelId,
+            displayName,
+            periods: mPeriods,
+          };
+        }
+      }
       return {
         deviceId: snap.deviceId,
         deviceName: snap.deviceName || snap.hostname || snap.deviceId,
@@ -212,6 +483,8 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
         conversationCount: Number(snap.local.conversationCount || 0),
         totals: { ...snap.local.totals, cacheHitRate: cRate },
         todayTokens: devToday,
+        periods: finalizedPeriods,
+        models: devModels,
         latestGeneration: snap.local.latestGeneration || null,
         shareRatio: totalMergedTokens > 0 ? Number((devTotal / totalMergedTokens).toFixed(4)) : 0,
       };
@@ -234,6 +507,7 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
       cacheHitRate,
     },
     today: todayBucket,
+    periods: finalMergedPeriods,
     byDate,
     bySlot,
     legacyByDate,

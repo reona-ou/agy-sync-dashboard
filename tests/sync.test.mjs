@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { toLocalDateKey } from '../sidecars/dashboard/collector.mjs';
+import { discoverLanguageServer } from '../sidecars/dashboard/discovery.mjs';
 import {
   SLOT_MS,
   WINDOW_5H_MS,
@@ -832,4 +833,382 @@ test('sessionContext tracks active conversation via live trajectories, hook upda
     if (server) await new Promise((r) => server.close(r));
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }
+});
+
+test('mergeDeviceSnapshots computes 5h/today/7d/all periods per device and per model (including legacy fallback and active slot)', async () => {
+  // Choose nowMs 3 minutes into a 15-minute slot at local 14:03 so 5h, today (00:00..14:03), 7d, and >7d are distinct.
+  const baseDay = new Date(2026, 10, 21, 14, 3, 0, 0);
+  const nowMs = baseDay.getTime();
+  const slotNow = String(Math.floor(nowMs / SLOT_MS)); // active partial slot [14:00, 14:15)
+  const slot2hAgo = String(Math.floor((nowMs - 2 * 3600_000) / SLOT_MS)); // 12:00 (inside 5h, today, 7d)
+  const slot10hAgo = String(Math.floor((nowMs - 10 * 3600_000) / SLOT_MS)); // 04:00 (outside 5h, inside today & 7d)
+  const slot3dAgo = String(Math.floor((nowMs - 3 * 86400_000) / SLOT_MS)); // 3d ago (inside 7d, outside today & 5h)
+  const slot10dAgo = String(Math.floor((nowMs - 10 * 86400_000) / SLOT_MS)); // 10d ago (outside 7d, inside all)
+
+  const todayKey = toLocalDateKey(nowMs);
+  const day3dAgo = toLocalDateKey(nowMs - 3 * 86400_000);
+  const day10dAgo = toLocalDateKey(nowMs - 10 * 86400_000);
+
+  const devModern = {
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+    deviceId: 'dev-modern',
+    deviceName: 'Modern Desktop',
+    updatedAt: nowMs,
+    local: {
+      collectedAt: nowMs,
+      conversationCount: 3,
+      totals: {
+        inputTokens: 4000,
+        outputTokens: 1000,
+        cacheReadTokens: 15000,
+        cacheWriteTokens: 0,
+        thinkingTokens: 0,
+        totalTokens: 20000,
+        generations: 8,
+      },
+      byDate: {
+        [todayKey]: { inputTokens: 1500, outputTokens: 500, cacheReadTokens: 6000, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 8000, generations: 4 },
+        [day3dAgo]: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3800, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 5000, generations: 2 },
+        [day10dAgo]: { inputTokens: 1500, outputTokens: 300, cacheReadTokens: 5200, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 7000, generations: 2 },
+      },
+      byModel: {
+        'gemini-4-hydrogen': {
+          modelId: 'gemini-4-hydrogen',
+          displayName: 'Gemini 4 Hydrogen',
+          inputTokens: 2500,
+          outputTokens: 700,
+          cacheReadTokens: 9800,
+          cacheWriteTokens: 0,
+          thinkingTokens: 0,
+          totalTokens: 13000,
+          generations: 5,
+        },
+        'claude-sonnet-4-6': {
+          modelId: 'claude-sonnet-4-6',
+          displayName: 'Claude Sonnet 4.6',
+          inputTokens: 1500,
+          outputTokens: 300,
+          cacheReadTokens: 5200,
+          cacheWriteTokens: 0,
+          thinkingTokens: 0,
+          totalTokens: 7000,
+          generations: 3,
+        },
+      },
+      bySlot: {
+        [slotNow]: { gemini: { totalTokens: 3000, nonCacheTokens: 800, generations: 1 } },
+        [slot2hAgo]: { claude_gpt: { totalTokens: 2000, nonCacheTokens: 500, generations: 1 } },
+        [slot10hAgo]: { gemini: { totalTokens: 3000, nonCacheTokens: 700, generations: 2 } },
+        [slot3dAgo]: { claude_gpt: { totalTokens: 5000, nonCacheTokens: 1200, generations: 2 } },
+        [slot10dAgo]: { gemini: { totalTokens: 7000, nonCacheTokens: 1800, generations: 2 } },
+      },
+      bySlotModel: {
+        [slotNow]: {
+          'gemini-4-hydrogen': { inputTokens: 600, outputTokens: 200, cacheReadTokens: 2200, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 3000, generations: 1 },
+        },
+        [slot2hAgo]: {
+          'claude-sonnet-4-6': { inputTokens: 400, outputTokens: 100, cacheReadTokens: 1500, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 2000, generations: 1 },
+        },
+        [slot10hAgo]: {
+          'gemini-4-hydrogen': { inputTokens: 500, outputTokens: 200, cacheReadTokens: 2300, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 3000, generations: 2 },
+        },
+        [slot3dAgo]: {
+          'claude-sonnet-4-6': { inputTokens: 1100, outputTokens: 200, cacheReadTokens: 3700, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 5000, generations: 2 },
+        },
+        [slot10dAgo]: {
+          'gemini-4-hydrogen': { inputTokens: 1400, outputTokens: 300, cacheReadTokens: 5300, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 7000, generations: 2 },
+        },
+      },
+      recentConversations: [],
+    },
+  };
+
+  // Legacy v1.3.2 peer snapshot (has bySlot without bySlotModel)
+  const devLegacySlots = {
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+    deviceId: 'dev-legacy',
+    deviceName: 'Legacy Laptop',
+    updatedAt: nowMs - 60_000,
+    local: {
+      collectedAt: nowMs - 60_000,
+      conversationCount: 1,
+      totals: { inputTokens: 800, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 4000, generations: 2 },
+      byDate: {
+        [todayKey]: { inputTokens: 800, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 4000, generations: 2 },
+      },
+      byModel: {
+        'gemini-4-hydrogen': {
+          modelId: 'gemini-4-hydrogen',
+          displayName: 'Gemini 4 Hydrogen',
+          inputTokens: 800,
+          outputTokens: 200,
+          cacheReadTokens: 3000,
+          cacheWriteTokens: 0,
+          thinkingTokens: 0,
+          totalTokens: 4000,
+          generations: 2,
+        },
+      },
+      bySlot: {
+        [slot2hAgo]: { gemini: { totalTokens: 4000, nonCacheTokens: 1000, generations: 2 } },
+      },
+      recentConversations: [],
+    },
+  };
+
+  const merged = mergeDeviceSnapshots([devModern, devLegacySlots], 'dev-modern', nowMs);
+
+  // Active current partial slot (slotNow at 14:00 when nowMs is 14:03) must count 100% (3000), not 3/15.
+  const dMod = merged.devices.find((d) => d.deviceId === 'dev-modern');
+  const dLeg = merged.devices.find((d) => d.deviceId === 'dev-legacy');
+  assert.equal(dMod.periods['5h'].totalTokens, 5000); // slotNow (3000) + slot2hAgo (2000)
+  assert.equal(dMod.periods.today.totalTokens, 8000); // + slot10hAgo (3000)
+  assert.equal(dMod.periods['7d'].totalTokens, 13000); // + slot3dAgo (5000)
+  assert.equal(dMod.periods.all.totalTokens, 20000); // + slot10dAgo (7000)
+
+  assert.equal(dLeg.periods['5h'].totalTokens, 4000);
+  assert.equal(dLeg.periods.today.totalTokens, 4000);
+  assert.equal(dLeg.periods['7d'].totalTokens, 4000);
+  assert.equal(dLeg.periods.all.totalTokens, 4000);
+
+  assert.equal(merged.periods['5h'].totalTokens, 9000);
+  assert.equal(merged.periods.today.totalTokens, 12000);
+  assert.equal(merged.periods['7d'].totalTokens, 17000);
+  assert.equal(merged.periods.all.totalTokens, 24000);
+
+  assert.ok(Math.abs(dMod.periods['5h'].shareRatio - 5000 / 9000) < 0.001);
+  assert.ok(Math.abs(dLeg.periods['5h'].shareRatio - 4000 / 9000) < 0.001);
+
+  const gem = merged.models.find((m) => m.modelId === 'gemini-4-hydrogen');
+  const claude = merged.models.find((m) => m.modelId === 'claude-sonnet-4-6');
+  assert.equal(gem.periods['5h'].totalTokens, 7000); // 3000 (modern) + 4000 (legacy)
+  assert.equal(gem.periods.today.totalTokens, 10000); // + 3000 (10h ago)
+  assert.equal(gem.periods['7d'].totalTokens, 10000);
+  assert.equal(gem.periods.all.totalTokens, 17000); // + 7000 (10d ago)
+
+  assert.equal(claude.periods['5h'].totalTokens, 2000);
+  assert.equal(claude.periods.today.totalTokens, 2000);
+  assert.equal(claude.periods['7d'].totalTokens, 7000);
+  assert.equal(claude.periods.all.totalTokens, 7000);
+
+  // Per-device per-model period breakdown for cross-filtering
+  assert.equal(dMod.models['gemini-4-hydrogen'].periods['5h'].totalTokens, 3000);
+  assert.equal(dMod.models['gemini-4-hydrogen'].periods.today.totalTokens, 6000);
+  assert.equal(dMod.models['gemini-4-hydrogen'].periods.all.totalTokens, 13000);
+  assert.equal(dMod.models['claude-sonnet-4-6'].periods['5h'].totalTokens, 2000);
+  assert.equal(dMod.models['claude-sonnet-4-6'].periods['7d'].totalTokens, 7000);
+  assert.equal(dLeg.models['gemini-4-hydrogen'].periods['5h'].totalTokens, 4000);
+
+  // Verify createDashboardService strips raw bySlotModel while exposing periods to frontend
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-periods-srv-'));
+  try {
+    const liveNow = Date.now();
+    const liveSlot = String(Math.floor((liveNow - 60_000) / SLOT_MS));
+    const liveToday = toLocalDateKey(liveNow);
+    const liveLocal = {
+      ...devModern.local,
+      collectedAt: liveNow,
+      byDate: {
+        [liveToday]: { inputTokens: 600, outputTokens: 200, cacheReadTokens: 2200, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 3000, generations: 1 },
+      },
+      bySlot: {
+        [liveSlot]: { gemini: { totalTokens: 3000, nonCacheTokens: 800, generations: 1 } },
+      },
+      bySlotModel: {
+        [liveSlot]: {
+          'gemini-4-hydrogen': { inputTokens: 600, outputTokens: 200, cacheReadTokens: 2200, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 3000, generations: 1 },
+        },
+      },
+    };
+    const dataDir = path.join(tmpRoot, 'data');
+    const manager = new SyncManager({
+      paths: { pluginDataDir: dataDir, conversationsDir: path.join(tmpRoot, 'c'), summariesDb: path.join(tmpRoot, 's.db') },
+      collector: {
+        async collect() {
+          return liveLocal;
+        },
+      },
+      dataDir,
+    });
+    const service = await createDashboardService({
+      paths: { pluginDataDir: dataDir, pluginConfig: path.join(tmpRoot, 'cfg.json'), conversationsDir: path.join(tmpRoot, 'c'), summariesDb: path.join(tmpRoot, 's.db') },
+      syncManager: manager,
+      quotaClient: { async fetch() { return { connected: false, groups: [], fetchedAt: liveNow }; } },
+    });
+    const dash = await service.getDashboard({ forceSync: true });
+    assert.equal(dash.device.local.bySlotModel, undefined);
+    assert.equal(dash.device.local.bySlot, undefined);
+    assert.equal(dash.merged.periods['5h'].totalTokens, 3000);
+    assert.equal(dash.merged.devices[0].periods['7d'].totalTokens, 3000);
+    assert.equal(dash.merged.devices[0].models['gemini-4-hydrogen'].periods['5h'].totalTokens, 3000);
+    assert.equal(dash.merged.models[0].periods['5h'].totalTokens, 3000);
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('discoverLanguageServer supports daemon hub_*.json files (v2.34+ without --csrf_token), env fallback, and legacy CLI flags', async () => {
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-disc-'));
+  try {
+    const daemonDir = path.join(tmpRoot, 'daemon');
+    const logFile = path.join(tmpRoot, 'language_server.log');
+    await fs.mkdir(daemonDir, { recursive: true });
+    await fs.writeFile(logFile, 'Language server listening on random port at 1874 for HTTP\n', 'utf8');
+
+    // Stale hub file from dead PID should be skipped even if newer or older
+    await fs.writeFile(
+      path.join(daemonDir, 'hub_9968.json'),
+      JSON.stringify({ pid: 99991, httpPort: 9968, httpsPort: 9967, csrfToken: 'stale-tok' }),
+      'utf8'
+    );
+    await fs.writeFile(
+      path.join(daemonDir, 'hub_1874.json'),
+      JSON.stringify({ pid: 48168, httpPort: 1874, httpsPort: 1873, csrfToken: 'hub-live-tok' }),
+      'utf8'
+    );
+
+    const paths = {
+      antigravityData: tmpRoot,
+      daemonDir,
+      logCandidates: [logFile],
+    };
+
+    // 1) Process without --csrf_token on commandLine discovers via daemon/hub_1874.json
+    const epHub = await discoverLanguageServer(paths, {
+      env: {},
+      listProcesses: async () => [
+        { pid: 48168, commandLine: 'language_server.exe --standalone --read_host_bridge_token_from_stdin', ports: [1873, 1874] },
+      ],
+      probePort: async () => false,
+    });
+    assert.deepEqual(epHub, { pid: 48168, port: 1874, csrf: 'hub-live-tok' });
+
+    // 2) Reachable env ANTIGRAVITY_LS_ADDRESS + ANTIGRAVITY_CSRF_TOKEN short-circuits cleanly
+    const epEnv = await discoverLanguageServer(paths, {
+      env: { ANTIGRAVITY_LS_ADDRESS: '127.0.0.1:2888', ANTIGRAVITY_CSRF_TOKEN: 'env-tok' },
+      listProcesses: async () => {
+        throw new Error('should not enumerate processes when env endpoint is reachable');
+      },
+      probePort: async (port) => port === 2888,
+    });
+    assert.deepEqual(epEnv, { pid: null, port: 2888, csrf: 'env-tok' });
+
+    // 3) Unreachable env falls back to hub discovery
+    const epEnvFallback = await discoverLanguageServer(paths, {
+      env: { ANTIGRAVITY_LS_ADDRESS: '127.0.0.1:2999', ANTIGRAVITY_CSRF_TOKEN: 'dead-env-tok' },
+      listProcesses: async () => [
+        { pid: 48168, commandLine: 'language_server.exe --standalone --read_host_bridge_token_from_stdin', ports: [1874] },
+      ],
+      probePort: async () => false,
+    });
+    assert.deepEqual(epEnvFallback, { pid: 48168, port: 1874, csrf: 'hub-live-tok' });
+
+    // 4) Legacy Antigravity without daemon hub files falls back to CLI --csrf_token
+    const emptyDaemon = path.join(tmpRoot, 'empty-daemon');
+    await fs.mkdir(emptyDaemon, { recursive: true });
+    const epLegacy = await discoverLanguageServer(
+      { antigravityData: tmpRoot, daemonDir: emptyDaemon, logCandidates: [logFile] },
+      {
+        env: {},
+        listProcesses: async () => [
+          { pid: 1234, commandLine: 'language_server.exe --standalone --csrf_token=legacy-cli-tok', ports: [1874] },
+        ],
+        probePort: async () => false,
+      }
+    );
+    assert.deepEqual(epLegacy, { pid: 1234, port: 1874, csrf: 'legacy-cli-tok' });
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('parseRpcGeneratorContext and mergeDeviceSnapshots distinguish High vs XHigh and prefer readable displayName', () => {
+  const ctxXHigh = parseRpcGeneratorContext({
+    generatorMetadata: [
+      {
+        chatModel: {
+          responseModel: 'gemini-4-hydrogen',
+          model: 'MODEL_PLACEHOLDER_M528',
+          modelDisplayName: 'Gemini 4 Hydrogen (XHigh)',
+          usage: { inputTokens: '1200', cacheReadTokens: '20000', outputTokens: '400', thinkingOutputTokens: '100', responseOutputTokens: '300' },
+        },
+      },
+    ],
+  });
+  assert.equal(ctxXHigh.modelId, 'gemini-4-hydrogen-xhigh');
+  assert.equal(ctxXHigh.displayName, 'Gemini 4 Hydrogen (XHigh)');
+
+  const ctxPlaceholderOnly = parseRpcGeneratorContext({
+    generatorMetadata: [
+      {
+        chatModel: {
+          model: 'MODEL_PLACEHOLDER_M528',
+          usage: { inputTokens: '500', cacheReadTokens: '1000', outputTokens: '100' },
+        },
+      },
+    ],
+  });
+  assert.equal(ctxPlaceholderOnly.modelId, 'gemini-4-hydrogen-xhigh');
+  assert.equal(ctxPlaceholderOnly.displayName, 'Gemini 4 Hydrogen (XHigh)');
+
+  const nowMs = Date.now();
+  const merged = mergeDeviceSnapshots([
+    {
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+      deviceId: 'dev-a',
+      deviceName: 'Dev A',
+      updatedAt: nowMs,
+      local: {
+        collectedAt: nowMs,
+        conversationCount: 1,
+        totals: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 850, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 1000, generations: 1 },
+        byDate: {},
+        byModel: {
+          'gemini-3.8-flash-n-high': {
+            modelId: 'gemini-3.8-flash-n-high',
+            displayName: 'gemini-3.8-flash-n-high',
+            inputTokens: 100,
+            outputTokens: 50,
+            cacheReadTokens: 850,
+            cacheWriteTokens: 0,
+            thinkingTokens: 0,
+            totalTokens: 1000,
+            generations: 1,
+          },
+        },
+        recentConversations: [],
+      },
+    },
+    {
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+      deviceId: 'dev-b',
+      deviceName: 'Dev B',
+      updatedAt: nowMs,
+      local: {
+        collectedAt: nowMs,
+        conversationCount: 1,
+        totals: { inputTokens: 200, outputTokens: 100, cacheReadTokens: 1700, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 2000, generations: 2 },
+        byDate: {},
+        byModel: {
+          'gemini-3.8-flash-n-high': {
+            modelId: 'gemini-3.8-flash-n-high',
+            displayName: 'Gemini 3.8 Flash (High)',
+            inputTokens: 200,
+            outputTokens: 100,
+            cacheReadTokens: 1700,
+            cacheWriteTokens: 0,
+            thinkingTokens: 0,
+            totalTokens: 2000,
+            generations: 2,
+          },
+        },
+        recentConversations: [],
+      },
+    },
+  ], 'dev-b', nowMs);
+
+  const flash = merged.models.find((m) => m.modelId === 'gemini-3.8-flash-n-high');
+  assert.ok(flash);
+  assert.equal(flash.displayName, 'Gemini 3.8 Flash (High)');
+  assert.equal(flash.totalTokens, 3000);
 });

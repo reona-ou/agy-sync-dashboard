@@ -9,6 +9,7 @@ import {
   parseGenContextSnapshot,
   parseGenMetadataBlob,
   parseStepMetadata,
+  resolveModelMeta,
   toLocalDateKey,
 } from '../sidecars/dashboard/collector.mjs';
 
@@ -228,6 +229,17 @@ test('LocalUsageCollector scans SQLite DBs and deduplicates shared responseId ac
     const todayKey = toLocalDateKey(ts1);
     assert.equal(snap.byDate[todayKey].totalTokens, 7600);
 
+    // Verify per-model 15-minute slot aggregation (bySlotModel)
+    assert.ok(snap.bySlotModel);
+    const slotModelTotals = {};
+    for (const modelMap of Object.values(snap.bySlotModel)) {
+      for (const [mId, bucket] of Object.entries(modelMap)) {
+        slotModelTotals[mId] = (slotModelTotals[mId] || 0) + bucket.totalTokens;
+      }
+    }
+    assert.equal(slotModelTotals['gemini-4-hydrogen'], 5400);
+    assert.equal(slotModelTotals['claude-sonnet-4-6'], 2200);
+
     // Second pass hits incremental file cache cleanly.
     const snap2 = await collector.collect();
     assert.equal(snap2.totals.totalTokens, 7600);
@@ -312,6 +324,86 @@ test('parseGenContextSnapshot and LocalUsageCollector extract current context us
     assert.equal(eCtx.contextInfo.source, 'estimate');
     assert.equal(eCtx.contextInfo.usedTokens, 64200);
     assert.equal(eCtx.contextInfo.maxContextTokens, 256000);
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('resolveModelMeta and LocalUsageCollector distinguish reasoning tiers (High vs XHigh) sharing base modelId', async () => {
+  assert.deepEqual(
+    resolveModelMeta('gemini-4-hydrogen', 'Gemini 4 Hydrogen (High)', 1525),
+    { modelId: 'gemini-4-hydrogen-high', displayName: 'Gemini 4 Hydrogen (High)' }
+  );
+  assert.deepEqual(
+    resolveModelMeta('gemini-4-hydrogen', 'Gemini 4 Hydrogen (XHigh)', 1528),
+    { modelId: 'gemini-4-hydrogen-xhigh', displayName: 'Gemini 4 Hydrogen (XHigh)' }
+  );
+  assert.deepEqual(
+    resolveModelMeta('', 'Gemini 4 Hydrogen (XHigh)', 1528),
+    { modelId: 'gemini-4-hydrogen-xhigh', displayName: 'Gemini 4 Hydrogen (XHigh)' }
+  );
+  assert.deepEqual(
+    resolveModelMeta('gemini-4-hydrogen', '', 1528),
+    { modelId: 'gemini-4-hydrogen-xhigh', displayName: 'Gemini 4 Hydrogen (XHigh)' }
+  );
+  assert.deepEqual(
+    resolveModelMeta('gemini-4-hydrogen', 'Gemini 4 Hydrogen (Extra High)', 0),
+    { modelId: 'gemini-4-hydrogen-xhigh', displayName: 'Gemini 4 Hydrogen (Extra High)' }
+  );
+  assert.deepEqual(
+    resolveModelMeta('gemini-4-hydrogen-tiered-high', 'Gemini 4 Hydrogen (High)', 1530),
+    { modelId: 'gemini-4-hydrogen-tiered-high', displayName: 'Gemini 4 Hydrogen (Tiered High)' }
+  );
+  assert.deepEqual(
+    resolveModelMeta('', '', 1318),
+    { modelId: 'gemini-3.8-flash-n-high', displayName: 'Gemini 3.8 Flash (High)' }
+  );
+
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-tiers-'));
+  try {
+    const convDir = path.join(tmpRoot, 'conversations');
+    const summariesDb = path.join(tmpRoot, 'conversation_summaries.db');
+    await fs.mkdir(convDir, { recursive: true });
+    const ts = Date.now() - 30_000;
+
+    createConvDb(path.join(convDir, 'conv-tiers.db'), 'High vs XHigh', [
+      {
+        timestampMs: ts,
+        modelEnum: 1525,
+        modelId: 'gemini-4-hydrogen',
+        displayName: 'Gemini 4 Hydrogen (High)',
+        inputTokens: 1000,
+        outputTokens: 300,
+        cacheReadTokens: 4000,
+        responseId: 'r-high-1',
+        messageId: 'm-high-1',
+      },
+      {
+        timestampMs: ts + 5000,
+        modelEnum: 1528,
+        modelId: 'gemini-4-hydrogen',
+        displayName: 'Gemini 4 Hydrogen (XHigh)',
+        inputTokens: 2000,
+        outputTokens: 700,
+        cacheReadTokens: 8000,
+        responseId: 'r-xhigh-1',
+        messageId: 'm-xhigh-1',
+      },
+    ]);
+
+    const collector = new LocalUsageCollector({ conversationsDir: convDir, summariesDb });
+    const snap = await collector.collect();
+
+    assert.equal(snap.byModel['gemini-4-hydrogen-high']?.totalTokens, 5300);
+    assert.equal(snap.byModel['gemini-4-hydrogen-high']?.displayName, 'Gemini 4 Hydrogen (High)');
+    assert.equal(snap.byModel['gemini-4-hydrogen-xhigh']?.totalTokens, 10700);
+    assert.equal(snap.byModel['gemini-4-hydrogen-xhigh']?.displayName, 'Gemini 4 Hydrogen (XHigh)');
+    assert.equal(snap.byModel['gemini-4-hydrogen'], undefined);
+
+    const slotVals = Object.values(snap.bySlotModel || {});
+    assert.equal(slotVals.length, 1);
+    assert.equal(slotVals[0]['gemini-4-hydrogen-high']?.totalTokens, 5300);
+    assert.equal(slotVals[0]['gemini-4-hydrogen-xhigh']?.totalTokens, 10700);
   } finally {
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }

@@ -202,11 +202,11 @@ export async function createDashboardService(options = {}) {
     }
     const cleanSynced = synced ? { ...synced } : synced;
     if (cleanSynced?.merged) {
-      const { bySlot: _bs, legacyByDate: _lbd, ...restMerged } = cleanSynced.merged;
+      const { bySlot: _bs, bySlotModel: _bsm, legacyByDate: _lbd, ...restMerged } = cleanSynced.merged;
       cleanSynced.merged = restMerged;
     }
     if (cleanSynced?.device?.local) {
-      const { bySlot: _lbs, ...restLocal } = cleanSynced.device.local;
+      const { bySlot: _lbs, bySlotModel: _lbsm, ...restLocal } = cleanSynced.device.local;
       cleanSynced.device = { ...cleanSynced.device, local: restLocal };
     }
     return { quota: enrichedQuota, cleanSynced };

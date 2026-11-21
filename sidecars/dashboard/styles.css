@@ -1,52 +1,76 @@
 /* AGY Sync Dashboard — presentation layer.
-   Lightweight by design: no framework, no build step, no extra DOM nodes.
-   Every rule keys off the class names app.js already emits, so a visual
-   revision never has to touch the data pipeline.
-   Tokens are --agy-* prefixed and guarded against host theme overrides. */
+   Moodboard-anchored visual system ("Midnight Nocturne" dark / "Opal Pearl" light):
+   no framework, no build step, zero Chromium oklch neutral-mixing artifacts. */
+
+:root {
+  --in-oklch: ;
+}
+
+@supports (background: linear-gradient(in oklab, white, black)) {
+  :root {
+    --in-oklch: in oklch;
+  }
+}
 
 :root,
 [data-theme='dark'] {
   color-scheme: dark;
 
-  /* host-adaptive seeds, written by app.js syncHostTheme() */
-  --agy-bg: var(--agy-host-bg, var(--background, var(--theme-bg, #14161d)));
-  --agy-fg: var(--agy-host-fg, var(--foreground, var(--theme-fg, #f1f3f9)));
-  --agy-accent: var(--agy-host-accent, var(--primary, var(--theme-accent, #7c5cff)));
-  --agy-on-accent: var(--agy-host-on-accent, #ffffff);
+  /* Midnight Nocturne: deep twilight navy -> sapphire glass -> astral azure/violet/sakura */
+  --agy-bg: #0b0e1e;
+  --agy-fg: #f3f5ff;
+  --agy-cyan: #38bdf8;
+  --agy-violet: #8b6dff;
+  --agy-rose: #f472b6;
+  --agy-gold: #f3cf7a;
+  --agy-gold-line: rgba(243, 207, 122, 0.34);
 
-  /* surfaces: page -> card -> inset tile, one step apart so nesting reads */
-  --agy-surface: color-mix(in srgb, var(--agy-bg) 89%, #ffffff);
-  --agy-surface-2: color-mix(in srgb, var(--agy-bg) 76%, #ffffff);
-  --agy-inset: color-mix(in srgb, var(--agy-bg) 84%, #000000);
-  /* fields must sit one step above their tile, not blend into it */
-  --agy-field-bg: color-mix(in srgb, var(--agy-bg) 84%, #ffffff);
-  --agy-muted: color-mix(in srgb, var(--agy-fg) 82%, var(--agy-bg));
-  --agy-faint: color-mix(in srgb, var(--agy-fg) 60%, var(--agy-bg));
-  --agy-border: color-mix(in srgb, var(--agy-fg) 15%, transparent);
-  --agy-border-soft: color-mix(in srgb, var(--agy-fg) 9%, transparent);
-  --agy-border-strong: color-mix(in srgb, var(--agy-fg) 28%, transparent);
+  /* solid primary fill clears >= 6.4:1 contrast with white label text */
+  --agy-accent: #6246ea;
+  --agy-on-accent: #ffffff;
+
+  /* surfaces: page -> card -> inset tile -> elevated field/picker */
+  --agy-surface: #131834;
+  --agy-surface-2: #1c2247;
+  --agy-inset: #0e1229;
+  --agy-field-bg: #171d40;
+  --agy-picker-bg: #151a3b;
+
+  --agy-muted: #c6cce8;
+  --agy-faint: #98a2d0;
+  --agy-border: rgba(164, 179, 245, 0.22);
+  --agy-border-soft: rgba(164, 179, 245, 0.13);
+  --agy-border-strong: rgba(168, 182, 248, 0.44);
 
   /* accent derivatives */
-  --agy-accent-ink: color-mix(in srgb, var(--agy-accent) 62%, #ffffff);
-  --agy-accent-soft: color-mix(in srgb, var(--agy-accent) 20%, transparent);
-  --agy-accent-line: color-mix(in srgb, var(--agy-accent) 45%, transparent);
-  --agy-accent-grad: linear-gradient(
-    135deg,
-    var(--agy-accent),
-    color-mix(in srgb, var(--agy-accent) 62%, #3ea8ff)
+  --agy-accent-ink: #c7b8ff;
+  --agy-accent-soft: color-mix(in oklab, var(--agy-violet) 18%, transparent);
+  --agy-accent-line: color-mix(in oklab, var(--agy-violet) 46%, transparent);
+  --agy-prism-grad: linear-gradient(
+    118deg var(--in-oklch),
+    var(--agy-cyan) 0%,
+    var(--agy-violet) 52%,
+    var(--agy-rose) 100%
   );
+  --agy-accent-grad: var(--agy-prism-grad);
 
-  /* status: raw hues for fills, -ink variants for text on tinted chips */
-  --agy-ok: #22c55e;
-  --agy-warn: #f59e0b;
-  --agy-danger: #ef4444;
-  --agy-ok-ink: color-mix(in srgb, var(--agy-ok) 62%, #ffffff);
-  --agy-warn-ink: color-mix(in srgb, var(--agy-warn) 68%, #ffffff);
-  --agy-danger-ink: color-mix(in srgb, var(--agy-danger) 66%, #ffffff);
+  /* status: celestial aqua / champagne amber / sakura crimson */
+  --agy-ok: #2dd4bf;
+  --agy-warn: #f5b942;
+  --agy-danger: #fb6f92;
+  --agy-ok-ink: #6ee7b7;
+  --agy-warn-ink: #fde08d;
+  --agy-danger-ink: #fda4af;
 
-  --agy-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.26);
-  --agy-shadow-2: 0 6px 18px rgba(0, 0, 0, 0.3);
-  --agy-ring: 0 0 0 3px color-mix(in srgb, var(--agy-accent) 26%, transparent);
+  --agy-shadow-1: 0 2px 6px rgba(3, 5, 16, 0.45),
+    inset 0 1px 0 rgba(243, 245, 255, 0.06);
+  --agy-shadow-2: 0 10px 26px rgba(3, 5, 16, 0.56),
+    0 0 0 1px rgba(139, 109, 255, 0.2),
+    inset 0 1px 0 rgba(243, 245, 255, 0.09);
+  --agy-shadow-picker: 0 18px 42px rgba(2, 4, 14, 0.78),
+    0 0 0 1px rgba(243, 207, 122, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --agy-ring: 0 0 0 3px color-mix(in oklab, var(--agy-violet) 32%, transparent);
 
   --agy-font-sans: var(
     --font-family,
@@ -56,24 +80,18 @@
     --editor-font-family,
     var(--theme-font-mono, ui-monospace, "Cascadia Mono", Consolas, monospace)
   );
-  --agy-r-sm: 6px;
-  --agy-r-md: 9px;
-  --agy-r-lg: 13px;
+  --agy-r-sm: 7px;
+  --agy-r-md: 10px;
+  --agy-r-lg: 14px;
   --agy-r-pill: 999px;
   --agy-content-max: 780px;
   --agy-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
-  /* Fluid chrome: the pane can be 240px wide (aux pane, 12" 2-in-1 split) or
-     780px+ (full tab), so spacing and display type scale with the viewport
-     instead of waiting for a breakpoint that always fires too late.
-     vw == pane width here: the dashboard renders in its own webview. */
   --agy-pad-page: clamp(8px, 2.4vw, 12px);
   --agy-pad-card: clamp(9px, 2.7vw, 12px);
   --agy-stack-gap: clamp(9px, 1.5vw, 11px);
   --agy-chart-h: clamp(66px, 18vw, 92px);
   --agy-fs-kpi: clamp(16.5px, 4.4vw, 20px);
-  /* Narrowest track a tile may shrink to before the grid gives it a line of
-     its own; auto-fit reads these so columns collapse on room actually left. */
   --agy-col-min: 148px;
   --agy-col-min-form: 178px;
   --agy-col-min-mode: 126px;
@@ -81,40 +99,56 @@
 
 [data-theme='light'] {
   color-scheme: light;
-  --agy-bg: var(--agy-host-bg, var(--background, #f6f7fb));
-  --agy-fg: var(--agy-host-fg, var(--foreground, #171923));
-  --agy-accent: var(--agy-host-accent, var(--primary, #5b46f6));
-  --agy-on-accent: var(--agy-host-on-accent, #ffffff);
+
+  /* Opal Pearl: snow-white silk -> translucent sky/lilac/sakura ribbons */
+  --agy-bg: #f4f5fe;
+  --agy-fg: #161936;
+  --agy-cyan: #0284c7;
+  --agy-violet: #624cf5;
+  --agy-rose: #db2777;
+  --agy-gold: #b45309;
+  --agy-gold-line: rgba(180, 118, 22, 0.34);
+
+  --agy-accent: #5640e8;
+  --agy-on-accent: #ffffff;
 
   --agy-surface: #ffffff;
-  --agy-surface-2: color-mix(in srgb, var(--agy-bg) 78%, #0f172a);
-  --agy-inset: color-mix(in srgb, var(--agy-bg) 42%, #ffffff);
+  --agy-surface-2: #eaedfc;
+  --agy-inset: #eef0fb;
   --agy-field-bg: #ffffff;
-  --agy-muted: color-mix(in srgb, var(--agy-fg) 84%, var(--agy-bg));
-  --agy-faint: color-mix(in srgb, var(--agy-fg) 46%, var(--agy-bg));
-  --agy-border: color-mix(in srgb, var(--agy-fg) 12%, transparent);
-  --agy-border-soft: color-mix(in srgb, var(--agy-fg) 7%, transparent);
-  --agy-border-strong: color-mix(in srgb, var(--agy-fg) 24%, transparent);
+  --agy-picker-bg: #ffffff;
 
-  --agy-accent-ink: color-mix(in srgb, var(--agy-accent) 82%, #000000);
-  --agy-accent-soft: color-mix(in srgb, var(--agy-accent) 12%, transparent);
-  --agy-accent-line: color-mix(in srgb, var(--agy-accent) 34%, transparent);
-  --agy-accent-grad: linear-gradient(
-    135deg,
-    var(--agy-accent),
-    color-mix(in srgb, var(--agy-accent) 66%, #7cc0ff)
+  --agy-muted: #454c75;
+  --agy-faint: #59618c;
+  --agy-border: rgba(45, 55, 112, 0.18);
+  --agy-border-soft: rgba(45, 55, 112, 0.11);
+  --agy-border-strong: rgba(52, 62, 122, 0.48);
+
+  --agy-accent-ink: #422ec7;
+  --agy-accent-soft: color-mix(in oklab, var(--agy-violet) 11%, transparent);
+  --agy-accent-line: color-mix(in oklab, var(--agy-violet) 38%, transparent);
+  --agy-prism-grad: linear-gradient(
+    118deg var(--in-oklch),
+    #0ea5e9 0%,
+    #624cf5 54%,
+    #ec4899 100%
   );
+  --agy-accent-grad: var(--agy-prism-grad);
 
-  --agy-ok: #16a34a;
+  --agy-ok: #0d9488;
   --agy-warn: #d97706;
-  --agy-danger: #dc2626;
-  --agy-ok-ink: color-mix(in srgb, var(--agy-ok) 72%, #000000);
-  --agy-warn-ink: color-mix(in srgb, var(--agy-warn) 74%, #000000);
-  --agy-danger-ink: color-mix(in srgb, var(--agy-danger) 76%, #000000);
+  --agy-danger: #e11d48;
+  --agy-ok-ink: #0f766e;
+  --agy-warn-ink: #92400e;
+  --agy-danger-ink: #be123c;
 
-  --agy-shadow-1: 0 1px 2px rgba(15, 23, 42, 0.05);
-  --agy-shadow-2: 0 8px 22px rgba(15, 23, 42, 0.08);
-  --agy-ring: 0 0 0 3px color-mix(in srgb, var(--agy-accent) 18%, transparent);
+  --agy-shadow-1: 0 2px 8px rgba(32, 38, 92, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --agy-shadow-2: 0 10px 26px rgba(48, 56, 130, 0.11),
+    0 0 0 1px rgba(98, 76, 245, 0.1);
+  --agy-shadow-picker: 0 16px 38px rgba(32, 40, 108, 0.16),
+    0 0 0 1px rgba(98, 76, 245, 0.16);
+  --agy-ring: 0 0 0 3px color-mix(in oklab, var(--agy-violet) 22%, transparent);
 }
 
 *,
@@ -129,7 +163,7 @@ body {
   max-width: 100%;
   margin: 0;
   padding: 0;
-  background: var(--agy-bg) !important;
+  background-color: var(--agy-bg) !important;
   color: var(--agy-fg) !important;
   font-family: var(--agy-font-sans) !important;
   font-size: 13px;
@@ -138,14 +172,23 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* one faint accent wash behind the header: depth without another element */
+/* subtle astral aurora + distant pinpoints on Midnight Nocturne */
 body {
-  background-image: radial-gradient(
-    130% 55% at 50% -12%,
-    color-mix(in srgb, var(--agy-accent) 10%, transparent),
-    transparent 68%
-  ) !important;
+  background-image:
+    radial-gradient(1.5px 1.5px at 14% 18%, color-mix(in oklab, var(--agy-gold) 48%, transparent) 0, transparent 100%),
+    radial-gradient(1px 1px at 78% 12%, color-mix(in oklab, var(--agy-cyan) 55%, transparent) 0, transparent 100%),
+    radial-gradient(1px 1px at 90% 34%, color-mix(in oklab, var(--agy-rose) 48%, transparent) 0, transparent 100%),
+    radial-gradient(95% 42% at 15% -10%, color-mix(in oklab, var(--agy-cyan) 13%, transparent), transparent 68%),
+    radial-gradient(85% 44% at 88% -8%, color-mix(in oklab, var(--agy-rose) 11%, transparent), transparent 66%),
+    radial-gradient(120% 55% at 50% -14%, color-mix(in oklab, var(--agy-violet) 16%, transparent), transparent 72%) !important;
   background-repeat: no-repeat;
+}
+
+[data-theme='light'] body {
+  background-image:
+    radial-gradient(90% 42% at 15% -10%, color-mix(in oklab, var(--agy-cyan) 12%, transparent), transparent 68%),
+    radial-gradient(85% 44% at 88% -8%, color-mix(in oklab, var(--agy-rose) 10%, transparent), transparent 66%),
+    radial-gradient(120% 55% at 50% -14%, color-mix(in oklab, var(--agy-violet) 11%, transparent), transparent 72%) !important;
 }
 
 .shell {
@@ -169,11 +212,30 @@ body {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  background: color-mix(in srgb, var(--agy-bg) 86%, transparent);
-  backdrop-filter: blur(10px) saturate(140%);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  background: color-mix(in oklab, var(--agy-bg) 84%, transparent);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
   border-bottom: 1px solid var(--agy-border);
   padding: 10px var(--agy-pad-page) 0;
+}
+
+.topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg var(--in-oklch),
+    transparent 4%,
+    var(--agy-cyan) 28%,
+    var(--agy-violet) 54%,
+    var(--agy-rose) 80%,
+    transparent 96%
+  );
+  opacity: 0.62;
+  pointer-events: none;
 }
 
 /* cap the measure so the pane still reads in a wide split view */
@@ -202,27 +264,42 @@ body {
 }
 
 .brand-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--agy-r-pill);
-  background: var(--agy-faint);
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklab, var(--agy-surface-2) 86%, var(--agy-violet) 14%);
+  border: 1px solid var(--agy-border);
+  color: var(--agy-faint);
   flex: none;
-  transition: background-color 0.2s var(--agy-ease), box-shadow 0.2s var(--agy-ease);
+  transition: color 0.2s var(--agy-ease), border-color 0.2s var(--agy-ease),
+    box-shadow 0.2s var(--agy-ease), transform 0.2s var(--agy-ease);
+}
+
+.brand-star-svg {
+  width: 11px;
+  height: 11px;
+  display: block;
 }
 
 .brand-dot.ok {
-  background: var(--agy-ok);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agy-ok) 20%, transparent);
+  color: var(--agy-ok);
+  border-color: color-mix(in oklab, var(--agy-ok) 48%, transparent);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--agy-ok) 26%, transparent);
 }
 
 .brand-dot.warn {
-  background: var(--agy-warn);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agy-warn) 18%, transparent);
+  color: var(--agy-gold);
+  border-color: var(--agy-gold-line);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--agy-warn) 24%, transparent);
 }
 
 .brand-dot.err {
-  background: var(--agy-danger);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agy-danger) 20%, transparent);
+  color: var(--agy-danger);
+  border-color: color-mix(in oklab, var(--agy-danger) 50%, transparent);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--agy-danger) 28%, transparent);
 }
 
 /* heartbeat while a sync round-trip is in flight (class set by triggerSync) */
@@ -269,14 +346,14 @@ body {
 
 .status-pill.ok {
   color: var(--agy-ok-ink);
-  border-color: color-mix(in srgb, var(--agy-ok) 38%, transparent);
-  background: color-mix(in srgb, var(--agy-ok) 13%, transparent);
+  border-color: color-mix(in oklab, var(--agy-ok) 40%, transparent);
+  background: color-mix(in oklab, var(--agy-ok) 13%, transparent);
 }
 
 .status-pill.warn {
   color: var(--agy-warn-ink);
-  border-color: color-mix(in srgb, var(--agy-warn) 38%, transparent);
-  background: color-mix(in srgb, var(--agy-warn) 12%, transparent);
+  border-color: color-mix(in oklab, var(--agy-warn) 40%, transparent);
+  background: color-mix(in oklab, var(--agy-warn) 12%, transparent);
 }
 
 .icon-btn {
@@ -292,12 +369,12 @@ body {
   white-space: nowrap;
   cursor: pointer;
   transition: border-color 0.16s var(--agy-ease), background-color 0.16s var(--agy-ease),
-    transform 0.08s var(--agy-ease);
+    box-shadow 0.16s var(--agy-ease), transform 0.08s var(--agy-ease);
 }
 
 .icon-btn:hover {
   border-color: var(--agy-accent-line);
-  background: var(--agy-surface);
+  background: color-mix(in oklab, var(--agy-surface-2) 84%, var(--agy-violet) 16%);
 }
 
 .icon-btn:active {
@@ -309,19 +386,19 @@ body {
   cursor: wait;
 }
 
-/* the header has exactly one primary action; let it look like one.
-   Flat accent, not the gradient: the lighter stop would drop white label
-   contrast below 4.5:1 on some host accents. */
+/* solid deep amethyst action fill preserves >= 6:1 contrast on white label */
 #btn-sync {
-  border-color: transparent;
+  border: 1px solid color-mix(in oklab, #ffffff 18%, transparent);
   background: var(--agy-accent);
   color: var(--agy-on-accent);
-  box-shadow: var(--agy-shadow-1);
+  box-shadow: 0 2px 10px color-mix(in oklab, var(--agy-accent) 42%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--agy-gold) 28%, transparent);
 }
 
 #btn-sync:hover {
   background: var(--agy-accent);
-  filter: brightness(1.07);
+  border-color: var(--agy-gold-line);
+  filter: brightness(1.08);
 }
 
 #btn-sync:disabled {
@@ -361,24 +438,29 @@ body {
 
 .tab-btn:hover {
   color: var(--agy-fg);
-  background: color-mix(in srgb, var(--agy-fg) 5%, transparent);
+  background: color-mix(in oklab, var(--agy-violet) 10%, transparent);
 }
 
 .tab-btn[aria-selected='true'] {
   color: var(--agy-accent-ink);
-  background: transparent;
+  background: linear-gradient(
+    to top,
+    color-mix(in oklab, var(--agy-violet) 12%, transparent),
+    transparent 78%
+  );
   font-weight: 650;
 }
 
 .tab-btn[aria-selected='true']::after {
   content: '';
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 7px;
+  right: 7px;
   bottom: 0;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--agy-accent-grad);
+  height: 2.5px;
+  border-radius: 999px;
+  background: var(--agy-prism-grad);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--agy-violet) 48%, transparent);
 }
 
 .tab-btn:focus-visible,
@@ -386,6 +468,7 @@ body {
 .primary-btn:focus-visible,
 .chip-btn:focus-visible,
 .mode-btn:focus-visible,
+.period-btn:focus-visible,
 .chart-col:focus-visible,
 .input:focus-visible {
   outline: 2px solid var(--agy-accent);
@@ -422,7 +505,12 @@ body {
 
 .card {
   container-type: inline-size;
-  background: var(--agy-surface);
+  background: linear-gradient(
+    172deg,
+    color-mix(in oklab, var(--agy-surface) 95%, var(--agy-violet) 5%),
+    var(--agy-surface) 44%,
+    color-mix(in oklab, var(--agy-surface) 96%, var(--agy-cyan) 4%)
+  );
   border: 1px solid var(--agy-border-soft);
   border-radius: var(--agy-r-lg);
   padding: var(--agy-pad-card) calc(var(--agy-pad-card) + 1px);
@@ -434,7 +522,7 @@ body {
 }
 
 .card:hover {
-  border-color: var(--agy-border);
+  border-color: color-mix(in oklab, var(--agy-violet) 32%, var(--agy-border));
   box-shadow: var(--agy-shadow-2);
 }
 
@@ -463,6 +551,16 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.card-title::before {
+  content: '✦';
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--agy-gold);
+  vertical-align: 1px;
 }
 
 .tag {
@@ -612,28 +710,28 @@ body {
   height: 7px;
   width: 100%;
   border-radius: var(--agy-r-pill);
-  background: color-mix(in srgb, var(--agy-fg) 12%, transparent);
+  background: color-mix(in oklab, var(--agy-fg) 12%, transparent);
   overflow: hidden;
 }
 
 .meter-fill {
   height: 100%;
   border-radius: var(--agy-r-pill);
-  background: var(--agy-accent-grad);
+  background: var(--agy-prism-grad);
   box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.16);
   transition: width 0.45s var(--agy-ease), background-color 0.2s var(--agy-ease);
 }
 
 .meter-fill.ok {
-  background: linear-gradient(90deg, var(--agy-ok), color-mix(in srgb, var(--agy-ok) 58%, #5eead4));
+  background: linear-gradient(90deg var(--in-oklch), var(--agy-cyan), var(--agy-ok));
 }
 
 .meter-fill.warn {
-  background: linear-gradient(90deg, var(--agy-warn), color-mix(in srgb, var(--agy-warn) 60%, #fbbf24));
+  background: linear-gradient(90deg var(--in-oklch), var(--agy-gold), var(--agy-warn));
 }
 
 .meter-fill.danger {
-  background: linear-gradient(90deg, var(--agy-danger), color-mix(in srgb, var(--agy-danger) 58%, #fb923c));
+  background: linear-gradient(90deg var(--in-oklch), var(--agy-rose), var(--agy-danger));
 }
 
 /* the forecast panel sits one step lighter than its quota tile */
@@ -683,17 +781,17 @@ body {
 
 .forecast-runway.ok {
   color: var(--agy-ok-ink);
-  background: color-mix(in srgb, var(--agy-ok) 14%, transparent);
+  background: color-mix(in oklab, var(--agy-ok) 15%, transparent);
 }
 
 .forecast-runway.warn {
   color: var(--agy-warn-ink);
-  background: color-mix(in srgb, var(--agy-warn) 14%, transparent);
+  background: color-mix(in oklab, var(--agy-warn) 15%, transparent);
 }
 
 .forecast-runway.danger {
   color: var(--agy-danger-ink);
-  background: color-mix(in srgb, var(--agy-danger) 14%, transparent);
+  background: color-mix(in oklab, var(--agy-danger) 15%, transparent);
 }
 
 .forecast-rate {
@@ -801,8 +899,8 @@ body {
 
 .ctx-badge.live {
   color: var(--agy-ok-ink);
-  border-color: color-mix(in srgb, var(--agy-ok) 36%, transparent);
-  background: color-mix(in srgb, var(--agy-ok) 12%, transparent);
+  border-color: color-mix(in oklab, var(--agy-ok) 40%, transparent);
+  background: color-mix(in oklab, var(--agy-ok) 13%, transparent);
 }
 
 /* ----------------------------------------------------------- 14-day chart */
@@ -860,17 +958,22 @@ body {
   width: 100%;
   min-height: 2px;
   border-radius: 3px 3px 1px 1px;
-  background: color-mix(in srgb, var(--agy-accent) 40%, transparent);
+  background: color-mix(in oklab, var(--agy-violet) 44%, transparent);
   transition: background-color 0.16s var(--agy-ease);
 }
 
 .chart-col:hover .chart-bar {
-  background: color-mix(in srgb, var(--agy-accent) 76%, transparent);
+  background: color-mix(in oklab, var(--agy-violet) 78%, var(--agy-cyan) 22%);
 }
 
 .chart-col.active .chart-bar {
-  background: var(--agy-accent-grad);
-  filter: drop-shadow(0 2px 6px color-mix(in srgb, var(--agy-accent) 45%, transparent));
+  background: linear-gradient(
+    to top var(--in-oklch),
+    var(--agy-violet),
+    var(--agy-cyan)
+  );
+  box-shadow: inset 0 2px 0 var(--agy-gold);
+  filter: drop-shadow(0 2px 6px color-mix(in oklab, var(--agy-cyan) 36%, transparent));
 }
 
 .chart-axis {
@@ -980,14 +1083,181 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* ----------------------------------------------------- period usage views */
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-bottom: 9px;
+  padding: 6px 8px;
+  min-width: 0;
+  border-radius: var(--agy-r-md);
+  background: linear-gradient(
+    95deg,
+    color-mix(in oklab, var(--agy-inset) 86%, var(--agy-violet) 14%),
+    var(--agy-inset)
+  );
+  border: 1px solid var(--agy-border);
+}
+
+.filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--agy-muted);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.filter-select {
+  flex: 1 1 130px;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+
+.period-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 66px), 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.period-btn {
+  position: relative;
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  min-block-size: 38px;
+  padding: 5px 8px 7px;
+  border: 1px solid var(--agy-border);
+  border-radius: var(--agy-r-md);
+  background: var(--agy-inset);
+  color: var(--agy-fg);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: clip;
+  transition: border-color 0.16s var(--agy-ease), background-color 0.16s var(--agy-ease),
+    box-shadow 0.16s var(--agy-ease);
+}
+
+.period-btn:hover {
+  border-color: var(--agy-accent-line);
+  background: color-mix(in oklab, var(--agy-inset) 86%, var(--agy-violet) 14%);
+}
+
+.period-btn[aria-pressed='true'] {
+  background: linear-gradient(
+    145deg,
+    color-mix(in oklab, var(--agy-violet) 20%, var(--agy-inset)),
+    color-mix(in oklab, var(--agy-cyan) 10%, var(--agy-inset))
+  );
+  border-color: var(--agy-accent-line);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--agy-fg) 10%, transparent);
+}
+
+/* border on pseudo-element stays visible in forced-colors mode (WCAG 1.4.1) */
+.period-btn[aria-pressed='true']::after {
+  content: '';
+  position: absolute;
+  inset: auto 9px 0;
+  border-block-end: 2px solid var(--agy-cyan);
+}
+
+.period-btn-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--agy-muted);
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.period-btn[aria-pressed='true'] .period-btn-label {
+  color: var(--agy-accent-ink);
+}
+
+.period-btn-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--agy-fg);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.period-meta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  padding: 5px 8px;
+  margin-bottom: 8px;
+  border-radius: var(--agy-r-sm);
+  background: var(--agy-inset);
+  border: 1px solid var(--agy-border-soft);
+  font-size: 11px;
+  color: var(--agy-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.period-meta-desc {
+  font-weight: 650;
+  color: var(--agy-fg);
+}
+
+.entity-periods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 2px;
+  min-width: 0;
+}
+
+.entity-period-chip {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: var(--agy-r-pill);
+  background: var(--agy-inset);
+  border: 1px solid var(--agy-border-soft);
+  color: var(--agy-muted);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entity-period-chip.active {
+  color: var(--agy-accent-ink);
+  background: var(--agy-accent-soft);
+  border-color: var(--agy-accent-line);
+  font-weight: 600;
+}
+
 .notice {
   border-radius: var(--agy-r-md);
   padding: 9px 11px;
   font-size: 11.5px;
   line-height: 1.45;
-  border: 1px solid color-mix(in srgb, var(--agy-warn) 40%, transparent);
+  border: 1px solid color-mix(in oklab, var(--agy-warn) 42%, transparent);
   border-left: 3px solid var(--agy-warn);
-  background: color-mix(in srgb, var(--agy-warn) 11%, var(--agy-surface));
+  background: color-mix(in oklab, var(--agy-warn) 12%, var(--agy-surface));
   color: var(--agy-fg);
 }
 
@@ -1115,15 +1385,212 @@ body {
   opacity: 1;
 }
 
-/* the native select arrow is inconsistent across host builds; draw our own */
-select.input {
-  appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, var(--agy-muted) 50%),
-    linear-gradient(135deg, var(--agy-muted) 50%, transparent 50%);
-  background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-  padding-right: 26px;
+select.input.filter-select {
+  width: auto;
+}
+
+@supports (appearance: base-select) {
+  select.input,
+  select.input::picker(select) {
+    appearance: base-select;
+  }
+
+  select.input {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    padding: 6px 10px;
+    min-block-size: 34px;
+    font-weight: 550;
+    color: var(--agy-fg);
+    border-radius: var(--agy-r-md);
+    border: 1px solid var(--agy-border-strong);
+    background: linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--agy-field-bg) 92%, var(--agy-violet) 8%),
+      var(--agy-field-bg)
+    );
+    box-shadow: var(--agy-shadow-1);
+    transition: border-color 0.16s var(--agy-ease), box-shadow 0.16s var(--agy-ease),
+      background-color 0.16s var(--agy-ease);
+  }
+
+  select.input.filter-select {
+    min-block-size: 32px;
+    padding: 5px 9px;
+  }
+
+  select.input:hover {
+    border-color: var(--agy-accent-line);
+    background: linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--agy-field-bg) 82%, var(--agy-violet) 18%),
+      var(--agy-field-bg)
+    );
+  }
+
+  select.input:open,
+  select.input:focus-visible {
+    border-color: var(--agy-accent);
+    box-shadow: var(--agy-ring);
+  }
+
+  select.input > .select-trigger,
+  select.input:open > .select-trigger {
+    all: unset;
+    display: flex;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--agy-fg);
+    opacity: 1;
+  }
+
+  select.input selectedcontent,
+  select.input:open selectedcontent {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    color: var(--agy-fg);
+    opacity: 1;
+  }
+
+  select.input::picker-icon {
+    content: '';
+    flex: none;
+    width: 14px;
+    height: 14px;
+    margin-left: auto;
+    background-color: var(--agy-gold);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M4.2 5.7a.75.75 0 0 1 1.06.04L8 8.65l2.74-2.91a.75.75 0 1 1 1.1 1.02l-3.29 3.5a.75.75 0 0 1-1.1 0L4.16 6.76a.75.75 0 0 1 .04-1.06Z'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M4.2 5.7a.75.75 0 0 1 1.06.04L8 8.65l2.74-2.91a.75.75 0 1 1 1.1 1.02l-3.29 3.5a.75.75 0 0 1-1.1 0L4.16 6.76a.75.75 0 0 1 .04-1.06Z'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+    transition: transform 0.2s var(--agy-ease), background-color 0.16s var(--agy-ease);
+  }
+
+  select.input:open::picker-icon {
+    transform: rotate(180deg);
+    background-color: var(--agy-cyan);
+  }
+
+  select.input::picker(select) {
+    margin-block-start: 5px;
+    padding: 5px;
+    min-width: anchor-size(width);
+    max-inline-size: min(320px, calc(100vw - 16px));
+    max-block-size: min(260px, 60vh);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    border-radius: 12px;
+    border: 1px solid color-mix(in oklab, var(--agy-violet) 46%, var(--agy-gold-line));
+    background: linear-gradient(
+      160deg,
+      color-mix(in oklab, var(--agy-picker-bg) 90%, var(--agy-cyan) 10%),
+      var(--agy-picker-bg) 48%,
+      color-mix(in oklab, var(--agy-picker-bg) 92%, var(--agy-rose) 8%)
+    );
+    color: var(--agy-fg);
+    box-shadow: var(--agy-shadow-picker);
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+    transform-origin: top center;
+    transition: opacity 0.16s var(--agy-ease), transform 0.16s var(--agy-ease),
+      display 0.16s allow-discrete, overlay 0.16s allow-discrete;
+  }
+
+  select.input:open::picker(select) {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  @starting-style {
+    select.input:open::picker(select) {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.98);
+    }
+  }
+
+  select.input option {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 9px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.35;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+    color: var(--agy-fg);
+    cursor: pointer;
+    transition: background-color 0.12s var(--agy-ease), color 0.12s var(--agy-ease),
+      box-shadow 0.12s var(--agy-ease);
+  }
+
+  select.input option + option {
+    margin-top: 2px;
+  }
+
+  select.input option:hover,
+  select.input option:focus-visible {
+    background: color-mix(in oklab, var(--agy-violet) 22%, transparent);
+    color: var(--agy-fg);
+    outline: none;
+  }
+
+  select.input option:checked {
+    background: linear-gradient(
+      90deg var(--in-oklch),
+      color-mix(in oklab, var(--agy-cyan) 18%, transparent),
+      color-mix(in oklab, var(--agy-violet) 24%, transparent)
+    );
+    color: var(--agy-fg);
+    font-weight: 650;
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--agy-violet) 42%, transparent);
+  }
+
+  select.input option::checkmark {
+    content: '✦';
+    order: 99;
+    margin-left: auto;
+    color: var(--agy-gold);
+    font-size: 11px;
+    line-height: 1;
+    flex: none;
+  }
+
+  select.input option:not(:checked)::checkmark {
+    content: '✦';
+    order: 99;
+    margin-left: auto;
+    opacity: 0;
+  }
+}
+
+@supports not (appearance: base-select) {
+  /* fallback custom chevron when customizable select picker is unsupported */
+  select.input {
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--agy-muted) 50%),
+      linear-gradient(135deg, var(--agy-muted) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 26px;
+  }
+
+  select.input > .select-trigger {
+    display: none;
+  }
 }
 
 .mono {
@@ -1336,6 +1803,12 @@ select.input {
   min-width: 0;
 }
 
+@container (min-width: 390px) {
+  .period-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 /* Wide cards keep the original pairing: four tiles read better as 2x2 than as
    a row of four 180px slivers, and auto-fit alone cannot express "never 3". */
 @container (min-width: 480px) {
@@ -1404,15 +1877,15 @@ select.input {
 }
 
 .test-box.ok {
-  border-color: color-mix(in srgb, var(--agy-ok) 38%, transparent);
+  border-color: color-mix(in oklab, var(--agy-ok) 40%, transparent);
   border-left-color: var(--agy-ok);
-  background: color-mix(in srgb, var(--agy-ok) 11%, var(--agy-surface));
+  background: color-mix(in oklab, var(--agy-ok) 12%, var(--agy-surface));
 }
 
 .test-box.err {
-  border-color: color-mix(in srgb, var(--agy-danger) 38%, transparent);
+  border-color: color-mix(in oklab, var(--agy-danger) 40%, transparent);
   border-left-color: var(--agy-danger);
-  background: color-mix(in srgb, var(--agy-danger) 11%, var(--agy-surface));
+  background: color-mix(in oklab, var(--agy-danger) 12%, var(--agy-surface));
 }
 
 /* ------------------------------------------------------------- utilities */
@@ -1438,10 +1911,10 @@ select.input {
 @keyframes agy-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--agy-accent) 45%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--agy-violet) 48%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 5px color-mix(in srgb, var(--agy-accent) 0%, transparent);
+    box-shadow: 0 0 0 5px color-mix(in oklab, var(--agy-violet) 0%, transparent);
   }
 }
 
@@ -1516,9 +1989,74 @@ select.input {
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
-  *::after {
+  *::after,
+  select.input::picker(select),
+  select.input::picker-icon {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  html,
+  body {
+    background: Canvas !important;
+    background-image: none !important;
+    color: CanvasText !important;
+  }
+
+  .topbar {
+    background: Canvas;
+    border-bottom: 1px solid CanvasText;
+  }
+
+  .topbar::after {
+    display: none;
+  }
+
+  .card,
+  .kpi-box,
+  .quota-item,
+  .quota-forecast,
+  .ctx-box,
+  .subcard,
+  .filter-bar,
+  .period-btn,
+  .mode-btn,
+  select.input,
+  select.input::picker(select) {
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+
+  .tab-btn[aria-selected='true']::after,
+  .period-btn[aria-pressed='true']::after {
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .period-btn[aria-pressed='true'],
+  .mode-btn[aria-checked='true'],
+  #btn-sync,
+  .primary-btn,
+  select.input option:checked {
+    background: Highlight;
+    color: HighlightText;
+    border-color: Highlight;
+  }
+
+  .meter {
+    border: 1px solid CanvasText;
+  }
+
+  .meter-fill {
+    background: Highlight !important;
+  }
+
+  select.input::picker-icon {
+    background-color: ButtonText;
   }
 }
