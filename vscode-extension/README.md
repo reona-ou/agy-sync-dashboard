@@ -37,16 +37,16 @@ npm run build:vsix
 
 This syncs the shared runtime into `vscode-extension/runtime/` and outputs:
 
-`vscode-extension/dist/agy-sync-dashboard-vscode-1.6.4.vsix`
+`vscode-extension/dist/agy-sync-dashboard-vscode-1.6.5.vsix`
 
 ## Install Locally
 
 ```bash
 # Antigravity IDE
-antigravity-ide --install-extension vscode-extension/dist/agy-sync-dashboard-vscode-1.6.4.vsix
+antigravity-ide --install-extension vscode-extension/dist/agy-sync-dashboard-vscode-1.6.5.vsix
 
 # VS Code
-code --install-extension vscode-extension/dist/agy-sync-dashboard-vscode-1.6.4.vsix
+code --install-extension vscode-extension/dist/agy-sync-dashboard-vscode-1.6.5.vsix
 ```
 
 Or install via the Extensions view menu: **Install from VSIX...**.

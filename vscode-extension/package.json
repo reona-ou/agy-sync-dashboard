@@ -2,7 +2,7 @@
   "name": "agy-sync-dashboard",
   "displayName": "AGY Sync Dashboard",
   "description": "Multi-device Antigravity token usage dashboard, live quota forecast, session context monitor, and status bar capsule.",
-  "version": "1.6.4",
+  "version": "1.6.5",
   "publisher": "reona-ou",
   "extensionKind": [
     "ui",

@@ -520,6 +520,12 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
     assert.match(htmlBody, /value="zh-CN"/);
     assert.match(htmlBody, /value="en"/);
     assert.match(htmlBody, /value="ja"/);
+    assert.match(
+      htmlBody,
+      /id="panel-settings"[\s\S]*?<div class="stack">\s*<article class="card settings-card">/
+    );
+    const stylesBody = await (await fetch(`${base}/styles.css`)).text();
+    assert.match(stylesBody, /\.settings-card\s*\{[\s\S]*?max-width:\s*var\(--agy-content-max\)/);
     const appJsBody = await (await fetch(`${base}/app.js`)).text();
     assert.match(appJsBody, /\bja:\s*\{/);
 
