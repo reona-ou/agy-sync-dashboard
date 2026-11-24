@@ -257,6 +257,9 @@ function buildVsixManifest(pkg) {
   const repoUrl = typeof pkg.repository === 'string' ? pkg.repository : (pkg.repository?.url || '');
   const bugsUrl = typeof pkg.bugs === 'string' ? pkg.bugs : (pkg.bugs?.url || '');
   const homepageUrl = pkg.homepage || '';
+  const extensionKind = Array.isArray(pkg.extensionKind)
+    ? pkg.extensionKind.join(',')
+    : (pkg.extensionKind || 'workspace');
   const extraProps = [];
   if (repoUrl) {
     extraProps.push(
@@ -292,7 +295,7 @@ function buildVsixManifest(pkg) {
       <Property Id="Microsoft.VisualStudio.Code.Engine" Value="${escapeXml(pkg.engines?.vscode || '^1.85.0')}" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionDependencies" Value="" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionPack" Value="" />
-      <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="workspace" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="${escapeXml(extensionKind)}" />
       <Property Id="Microsoft.VisualStudio.Code.LocalizedLanguages" Value="" />
       <Property Id="Microsoft.VisualStudio.Code.EnabledApiProposals" Value="" />
       <Property Id="Microsoft.VisualStudio.Code.ExecutesCode" Value="true" />

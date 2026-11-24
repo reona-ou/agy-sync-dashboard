@@ -1,6 +1,6 @@
 {
   "name": "agy-sync-dashboard",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "private": true,
   "type": "module",
   "description": "Antigravity native sidecar plugin for multi-device token usage aggregation and quota monitoring",

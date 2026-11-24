@@ -151,6 +151,7 @@ test('vscode-extension formatStatusBarCapsule renders context, quota, cache, spe
 
 test('vscode-extension buildVsix packages a valid VSIX archive with runtime and manifest', async () => {
   const extPkg = JSON.parse(await fs.readFile(path.resolve('vscode-extension', 'package.json'), 'utf8'));
+  assert.deepEqual(extPkg.extensionKind, ['ui', 'workspace']);
   const res = await buildVsix();
   assert.equal(res.version, extPkg.version);
   assert.ok(res.fileCount > 10);

@@ -2,6 +2,6 @@
   "name": "agy-sync-dashboard",
   "display_name": "AGY Sync Dashboard",
   "description": "多设备 Token 用量汇总与配额监控侧边栏插件：本地只读 SQLite 解析 + 同步盘分设备累加 + 账号实时配额 + 当前对话上下文。",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "logo": "assets/logo.svg"
 }
