@@ -2,9 +2,22 @@
   "name": "agy-sync-dashboard",
   "displayName": "AGY Sync Dashboard",
   "description": "Multi-device Antigravity token usage dashboard, live quota forecast, session context monitor, and status bar capsule.",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "publisher": "reona-ou",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/reona-ou/agy-sync-dashboard.git"
+  },
+  "homepage": "https://github.com/reona-ou/agy-sync-dashboard#readme",
+  "bugs": {
+    "url": "https://github.com/reona-ou/agy-sync-dashboard/issues"
+  },
+  "qna": "marketplace",
+  "galleryBanner": {
+    "color": "#0E1229",
+    "theme": "dark"
+  },
   "icon": "assets/icon.png",
   "engines": {
     "vscode": "^1.85.0"
