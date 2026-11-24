@@ -4,9 +4,10 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { toLocalDateKey } from '../sidecars/dashboard/collector.mjs';
+import { computeCacheHitRate, toLocalDateKey } from '../sidecars/dashboard/collector.mjs';
 import { discoverLanguageServer } from '../sidecars/dashboard/discovery.mjs';
 import {
+  MINUTE_MS,
   SLOT_MS,
   WINDOW_5H_MS,
   WINDOW_7D_MS,
@@ -712,6 +713,13 @@ test('sessionContext tracks active conversation via live trajectories, hook upda
   let server;
   try {
     const dataDir = path.join(tmpRoot, 'data');
+    await fs.mkdir(dataDir, { recursive: true });
+    // Pre-restart stale active-session.json (older than service startup) must not hijack live trajectories
+    await fs.writeFile(
+      path.join(dataDir, 'active-session.json'),
+      JSON.stringify({ conversationId: 'conv-1', updatedAt: nowMs - 1000 }),
+      'utf8'
+    );
     const contextMap = new Map([
       [
         'conv-1',
@@ -779,6 +787,7 @@ test('sessionContext tracks active conversation via live trajectories, hook upda
       dataDir,
     });
 
+    let liveTrajectories = trajectories;
     const service = await createDashboardService({
       paths: { pluginDataDir: dataDir, pluginConfig: path.join(tmpRoot, 'cfg.json'), conversationsDir: path.join(tmpRoot, 'c'), summariesDb: path.join(tmpRoot, 's.db') },
       syncManager: manager,
@@ -787,7 +796,7 @@ test('sessionContext tracks active conversation via live trajectories, hook upda
           return { connected: false, groups: [], fetchedAt: nowMs };
         },
         async fetchTrajectories() {
-          return { connected: true, trajectories, fetchedAt: nowMs };
+          return { connected: liveTrajectories.length > 0, trajectories: liveTrajectories, fetchedAt: nowMs };
         },
       },
     });
@@ -807,28 +816,43 @@ test('sessionContext tracks active conversation via live trajectories, hook upda
     assert.equal(dashAuto.sessionContext.current.remainingTokens, 307200);
     assert.ok(Math.abs(dashAuto.sessionContext.current.usageRatio - 0.4) < 0.001);
 
-    // /api/version exposes active conversation & context tokens
+    // /api/version exposes active conversation, context tokens, and running state
     const ver = await (await fetch(`${base}/api/version`)).json();
     assert.equal(ver.activeConvId, 'conv-2');
     assert.equal(ver.activeUsedTokens, 204800);
     assert.equal(ver.activeMaxContextTokens, 512000);
+    assert.equal(ver.activeIsRunning, true);
 
-    // Manual convId selection switches to conv-1
+    // Lightweight /api/session-context updates current session without full sync
+    const ctxOnly = await (await fetch(`${base}/api/session-context`)).json();
+    assert.equal(ctxOnly.revision, dashAuto.revision);
+    assert.equal(ctxOnly.sessionContext.current.conversationId, 'conv-2');
+    assert.equal(ctxOnly.sessionContext.current.usedTokens, 204800);
+
+    // Manual convId selection switches to conv-1 (and /api/version honors convId)
+    const verManual = await (await fetch(`${base}/api/version?convId=conv-1`)).json();
+    assert.equal(verManual.activeConvId, 'conv-1');
     const dashManual = await (await fetch(`${base}/api/dashboard?convId=conv-1`)).json();
     assert.equal(dashManual.sessionContext.selectionMode, 'manual');
     assert.equal(dashManual.sessionContext.current.conversationId, 'conv-1');
     assert.equal(dashManual.sessionContext.current.usedTokens, 64000);
     assert.equal(dashManual.sessionContext.current.maxContextTokens, 256000);
 
-    // Hook notification newer than lastUserViewMs promotes conv-1 in auto mode
+    // Live trajectories remain authoritative even after a hook notification for conv-1
     await fetch(`${base}/api/sync`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-agy-sync-token': 'tok-ctx' },
       body: JSON.stringify({ source: 'hook', conversationId: 'conv-1', updatedAt: nowMs + 5000 }),
     });
-    const dashHook = await (await fetch(`${base}/api/dashboard`)).json();
-    assert.equal(dashHook.sessionContext.detectionSource, 'hook');
-    assert.equal(dashHook.sessionContext.current.conversationId, 'conv-1');
+    const dashLive = await (await fetch(`${base}/api/dashboard`)).json();
+    assert.equal(dashLive.sessionContext.detectionSource, 'live-view');
+    assert.equal(dashLive.sessionContext.current.conversationId, 'conv-2');
+
+    // Hook notification acts as fallback when live trajectories are unavailable
+    liveTrajectories = [];
+    const dashHookFallback = await (await fetch(`${base}/api/dashboard`)).json();
+    assert.equal(dashHookFallback.sessionContext.detectionSource, 'hook');
+    assert.equal(dashHookFallback.sessionContext.current.conversationId, 'conv-1');
   } finally {
     if (server) await new Promise((r) => server.close(r));
     await fs.rm(tmpRoot, { recursive: true, force: true });
@@ -1038,6 +1062,9 @@ test('mergeDeviceSnapshots computes 5h/today/7d/all periods per device and per m
     const dash = await service.getDashboard({ forceSync: true });
     assert.equal(dash.device.local.bySlotModel, undefined);
     assert.equal(dash.device.local.bySlot, undefined);
+    assert.equal(dash.device.local.byMinute, undefined);
+    assert.equal(dash.merged.fallbackBySlot, undefined);
+    assert.equal(dash.merged.quotaCalibration, undefined);
     assert.equal(dash.merged.periods['5h'].totalTokens, 3000);
     assert.equal(dash.merged.devices[0].periods['7d'].totalTokens, 3000);
     assert.equal(dash.merged.devices[0].models['gemini-4-hydrogen'].periods['5h'].totalTokens, 3000);
@@ -1211,4 +1238,550 @@ test('parseRpcGeneratorContext and mergeDeviceSnapshots distinguish High vs XHig
   assert.ok(flash);
   assert.equal(flash.displayName, 'Gemini 3.8 Flash (High)');
   assert.equal(flash.totalTokens, 3000);
+});
+
+test('buildQuotaForecasts resolves actual previous cycle across idle gaps via recorded cycles and timeline reconstruction', () => {
+  const slotOf = (ms) => String(Math.floor(ms / SLOT_MS));
+  const nowMs = Math.floor(Date.UTC(2026, 10, 21, 12, 0, 0) / SLOT_MS) * SLOT_MS;
+
+  // Scenario 1: Weekly cycle with a 3-day idle gap between prevCycle and currCycle.
+  // Prev cycle: [now - 11d, now - 4d], active at day -10.5 (early) and day -5 (late).
+  // Idle gap: [now - 4d, now - 1d] (3 days).
+  // Curr cycle: [now - 1d, now + 6d].
+  // Naive [currStart - 7d, currStart] = [now - 8d, now - 1d] would miss day -10.5!
+  const prevCycleStart = nowMs - 11 * 86400_000;
+  const prevCycleEnd = nowMs - 4 * 86400_000;
+  const currCycleStart = nowMs - 1 * 86400_000;
+  const currCycleEnd = currCycleStart + WINDOW_7D_MS;
+
+  const mergedWeekly = {
+    bySlot: {
+      // Early part of previous cycle (10.5d ago, outside [currStart - 7d, currStart])
+      [slotOf(nowMs - 10.5 * 86400_000)]: { gemini: { totalTokens: 400_000, nonCacheTokens: 40_000, generations: 4 } },
+      // Late part of previous cycle (5d ago)
+      [slotOf(nowMs - 5 * 86400_000)]: { gemini: { totalTokens: 300_000, nonCacheTokens: 30_000, generations: 3 } },
+      // Current cycle usage
+      [slotOf(nowMs - 6 * 3600_000)]: { gemini: { totalTokens: 120_000, nonCacheTokens: 12_000, generations: 2 } },
+    },
+    legacyByDate: {},
+  };
+
+  const quotaWeekly = {
+    connected: true,
+    accountHash: 'acc-gap',
+    groups: [
+      {
+        id: 'gemini',
+        family: 'gemini',
+        title: 'Gemini Models',
+        windows: [
+          {
+            kind: 'weekly',
+            windowId: 'gemini-weekly',
+            remainingFraction: 0.88,
+            resetTime: new Date(currCycleEnd).toISOString(),
+            disabled: false,
+          },
+        ],
+      },
+    ],
+  };
+
+  // 1a) With persisted recorded previous cycle in calibration
+  const { quota: resRecorded, calibrationUpdates: updRecorded } = buildQuotaForecasts({
+    quota: quotaWeekly,
+    merged: mergedWeekly,
+    calibration: {
+      'acc-gap:gemini:weekly': {
+        capacityTokens: 1_000_000,
+        updatedAt: nowMs - 5 * 86400_000,
+        cycles: [{ startMs: prevCycleStart, endMs: prevCycleEnd }],
+      },
+    },
+    nowMs,
+  });
+  const fcRec = resRecorded.groups[0].windows[0].forecast;
+  assert.equal(fcRec.prevCycleSource, 'recorded');
+  assert.equal(fcRec.prevCycleStartMs, prevCycleStart);
+  assert.equal(fcRec.prevCycleEndMs, prevCycleEnd);
+  assert.equal(fcRec.prevUsedTokens, 700_000);
+  assert.equal(fcRec.currUsedTokens, 120_000);
+  // Persists both prevCycle and newly observed currCycle
+  assert.equal(updRecorded['acc-gap:gemini:weekly'].cycles.length, 2);
+  assert.equal(updRecorded['acc-gap:gemini:weekly'].capacityTokens, 1_000_000);
+
+  // 1b) Floating idle state (quota reset to 100%, no new cycle started yet) keeps recorded prevCycle
+  const { quota: resFloating } = buildQuotaForecasts({
+    quota: {
+      ...quotaWeekly,
+      groups: [
+        {
+          id: 'gemini',
+          family: 'gemini',
+          title: 'Gemini Models',
+          windows: [
+            {
+              kind: 'weekly',
+              windowId: 'gemini-weekly',
+              remainingFraction: 1,
+              resetTime: new Date(nowMs + WINDOW_7D_MS).toISOString(),
+              disabled: false,
+            },
+          ],
+        },
+      ],
+    },
+    merged: {
+      bySlot: {
+        [slotOf(nowMs - 10.5 * 86400_000)]: { gemini: { totalTokens: 400_000, nonCacheTokens: 40_000, generations: 4 } },
+        [slotOf(nowMs - 5 * 86400_000)]: { gemini: { totalTokens: 300_000, nonCacheTokens: 30_000, generations: 3 } },
+      },
+      legacyByDate: {},
+    },
+    calibration: {
+      'acc-gap:gemini:weekly': {
+        capacityTokens: 1_000_000,
+        cycles: [{ startMs: prevCycleStart, endMs: prevCycleEnd }],
+      },
+    },
+    nowMs,
+  });
+  const fcFloat = resFloating.groups[0].windows[0].forecast;
+  assert.equal(fcFloat.cycleActive, false);
+  assert.equal(fcFloat.currUsedTokens, 0);
+  assert.equal(fcFloat.prevCycleSource, 'recorded');
+  assert.equal(fcFloat.prevUsedTokens, 700_000);
+
+  // 1c) Cold start without calibration: reconstructs from timeline anchored before the 4-day idle gap
+  const { quota: resCold } = buildQuotaForecasts({
+    quota: quotaWeekly,
+    merged: mergedWeekly,
+    calibration: {},
+    nowMs,
+  });
+  const fcCold = resCold.groups[0].windows[0].forecast;
+  assert.equal(fcCold.prevCycleSource, 'timeline');
+  assert.equal(fcCold.prevUsedTokens, 700_000);
+
+  // Scenario 2: Cold-start 5h window with overnight sleep (>= 5h) and 2h break before currCycle
+  const curr5hStart = nowMs - 1 * 3600_000;
+  const curr5hEnd = curr5hStart + WINDOW_5H_MS;
+  const prev5hStart = curr5hStart - 7 * 3600_000; // 7h before curr5hStart => ended 2h before curr5hStart
+  const merged5h = {
+    bySlot: {
+      // Yesterday's cycle before sleep
+      [slotOf(prev5hStart - 12 * 3600_000)]: { claude_gpt: { totalTokens: 999_000, nonCacheTokens: 90_000, generations: 9 } },
+      // Actual previous 5h cycle: [prev5hStart, prev5hStart + 5h], active at start and +3h
+      [slotOf(prev5hStart)]: { claude_gpt: { totalTokens: 80_000, nonCacheTokens: 8_000, generations: 2 } },
+      [slotOf(prev5hStart + 3 * 3600_000)]: { claude_gpt: { totalTokens: 50_000, nonCacheTokens: 5_000, generations: 1 } },
+      // Current 5h cycle
+      [slotOf(curr5hStart)]: { claude_gpt: { totalTokens: 40_000, nonCacheTokens: 4_000, generations: 1 } },
+    },
+    legacyByDate: {},
+  };
+  const { quota: res5h } = buildQuotaForecasts({
+    quota: {
+      connected: true,
+      accountHash: 'acc-gap',
+      groups: [
+        {
+          id: 'claude_gpt',
+          family: 'claude_gpt',
+          title: 'Claude / GPT',
+          windows: [
+            {
+              kind: '5h',
+              windowId: '3p-5h',
+              remainingFraction: 0.8,
+              resetTime: new Date(curr5hEnd).toISOString(),
+              disabled: false,
+            },
+          ],
+        },
+      ],
+    },
+    merged: merged5h,
+    calibration: {},
+    nowMs,
+  });
+  const fc5hGap = res5h.groups[0].windows[0].forecast;
+  assert.equal(fc5hGap.prevCycleSource, 'timeline');
+  assert.equal(fc5hGap.prevCycleStartMs, prev5hStart);
+  assert.equal(fc5hGap.prevCycleEndMs, prev5hStart + WINDOW_5H_MS);
+  assert.equal(fc5hGap.prevUsedTokens, 130_000);
+
+  // Scenario 3: Stale recorded cycle (2+ cycles old with intermediate usage) falls back to timeline reconstruction
+  const staleStart = nowMs - 20 * 86400_000;
+  const staleEnd = staleStart + WINDOW_7D_MS; // 13d ago
+  const { quota: resStale } = buildQuotaForecasts({
+    quota: quotaWeekly,
+    merged: mergedWeekly,
+    calibration: {
+      'acc-gap:gemini:weekly': {
+        cycles: [{ startMs: staleStart, endMs: staleEnd }],
+      },
+    },
+    nowMs,
+  });
+  const fcStale = resStale.groups[0].windows[0].forecast;
+  assert.equal(fcStale.prevCycleSource, 'timeline');
+  assert.equal(fcStale.prevUsedTokens, 700_000);
+
+  // Scenario 4: Early/non-regular reset truncates the interrupted tracked cycle at currCycleStart
+  const interruptedStart = nowMs - 4 * 86400_000;
+  const interruptedOriginalEnd = interruptedStart + WINDOW_7D_MS; // originally now + 3d, cut short at now - 1d
+  const { quota: resEarly, calibrationUpdates: updEarly } = buildQuotaForecasts({
+    quota: quotaWeekly,
+    merged: {
+      bySlot: {
+        [slotOf(nowMs - 3 * 86400_000)]: { gemini: { totalTokens: 250_000, nonCacheTokens: 25_000, generations: 2 } },
+        [slotOf(nowMs - 6 * 3600_000)]: { gemini: { totalTokens: 120_000, nonCacheTokens: 12_000, generations: 2 } },
+      },
+      legacyByDate: {},
+    },
+    calibration: {
+      'acc-gap:gemini:weekly': {
+        cycles: [{ startMs: interruptedStart, endMs: interruptedOriginalEnd }],
+      },
+    },
+    nowMs,
+  });
+  const fcEarly = resEarly.groups[0].windows[0].forecast;
+  assert.equal(fcEarly.prevCycleSource, 'recorded');
+  assert.equal(fcEarly.prevCycleStartMs, interruptedStart);
+  assert.equal(fcEarly.prevCycleEndMs, currCycleStart);
+  assert.equal(fcEarly.prevUsedTokens, 250_000);
+  assert.equal(updEarly['acc-gap:gemini:weekly'].cycles[0].endMs, currCycleStart);
+});
+
+test('1-minute timeline precision, interrupted pre-cycle recovery, idle drift detection, windowMinutes, and cross-device cycle sync', async () => {
+  const minOf = (ms) => String(Math.floor(ms / MINUTE_MS));
+  // 1) 1-minute precision: cycle starts at 10:25:00, and a 5h09m idle gap (00:01 -> 05:10) exists before prev cycle [05:10, 10:10]
+  const base0 = Date.UTC(2026, 10, 22, 0, 0, 0);
+  const currStart = base0 + 10 * 3600_000 + 25 * 60_000; // 10:25
+  const currEnd = currStart + WINDOW_5H_MS; // 15:25
+  const nowMs = currStart + 30 * 60_000; // 10:55
+
+  const tOld = base0 + 1 * 60_000; // 00:01
+  const tPrevStart = base0 + 5 * 3600_000 + 10 * 60_000; // 05:10 (5h09m after 00:01 => valid reset!)
+  const tPrevMid = base0 + 8 * 3600_000; // 08:00
+
+  const mergedMin = mergeDeviceSnapshots([
+    {
+      schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+      deviceId: 'dev-min',
+      deviceName: 'Minute Device',
+      updatedAt: nowMs,
+      local: {
+        collectedAt: nowMs,
+        conversationCount: 1,
+        totals: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 320_000, generations: 4 },
+        byDate: {},
+        byModel: {},
+        byMinute: {
+          [minOf(tOld)]: { gemini: { totalTokens: 900_000, nonCacheTokens: 90_000, generations: 5 } },
+          [minOf(tPrevStart)]: { gemini: { totalTokens: 80_000, nonCacheTokens: 8_000, generations: 1 } },
+          [minOf(tPrevMid)]: { gemini: { totalTokens: 70_000, nonCacheTokens: 7_000, generations: 1 } },
+          [minOf(currStart)]: { gemini: { totalTokens: 60_000, nonCacheTokens: 6_000, generations: 1 } },
+        },
+        recentConversations: [],
+      },
+    },
+  ], 'dev-min', nowMs);
+
+  const { quota: resMin } = buildQuotaForecasts({
+    quota: {
+      connected: true,
+      accountHash: 'acc-min',
+      groups: [
+        {
+          id: 'gemini',
+          family: 'gemini',
+          title: 'Gemini',
+          windows: [
+            {
+              kind: '5h',
+              windowId: 'gemini-5h',
+              remainingFraction: 0.7,
+              resetTime: new Date(currEnd).toISOString(),
+              disabled: false,
+            },
+          ],
+        },
+      ],
+    },
+    merged: mergedMin,
+    calibration: {},
+    nowMs,
+  });
+  const fcMin = resMin.groups[0].windows[0].forecast;
+  assert.equal(fcMin.currUsedTokens, 60_000);
+  assert.equal(fcMin.prevCycleSource, 'timeline');
+  assert.equal(fcMin.prevCycleStartMs, tPrevStart);
+  assert.equal(fcMin.prevCycleEndMs, tPrevStart + WINDOW_5H_MS);
+  assert.equal(fcMin.prevUsedTokens, 150_000);
+
+  // 2) Interrupted cycle immediately before currStart is recovered instead of skipped:
+  // Morning [01:00, 06:00], afternoon activity at 07:30, then early reset at 10:25 => prevCycle = [07:30, 10:25]
+  const tMorning = base0 + 1 * 3600_000;
+  const tAfternoon = base0 + 7 * 3600_000 + 30 * 60_000;
+  const { quota: resInt } = buildQuotaForecasts({
+    quota: {
+      connected: true,
+      accountHash: 'acc-int',
+      groups: [
+        {
+          id: 'gemini',
+          family: 'gemini',
+          title: 'Gemini',
+          windows: [
+            {
+              kind: '5h',
+              windowId: 'gemini-5h',
+              remainingFraction: 0.8,
+              resetTime: new Date(currEnd).toISOString(),
+              disabled: false,
+            },
+          ],
+        },
+      ],
+    },
+    merged: {
+      byMinute: {
+        [minOf(tMorning)]: { gemini: { totalTokens: 500_000, nonCacheTokens: 50_000, generations: 4 } },
+        [minOf(tAfternoon)]: { gemini: { totalTokens: 110_000, nonCacheTokens: 11_000, generations: 2 } },
+        [minOf(currStart)]: { gemini: { totalTokens: 40_000, nonCacheTokens: 4_000, generations: 1 } },
+      },
+      legacyByDate: {},
+    },
+    calibration: {},
+    nowMs,
+  });
+  const fcInt = resInt.groups[0].windows[0].forecast;
+  assert.equal(fcInt.prevCycleSource, 'timeline');
+  assert.equal(fcInt.prevCycleStartMs, tAfternoon);
+  assert.equal(fcInt.prevCycleEndMs, currStart);
+  assert.equal(fcInt.prevUsedTokens, 110_000);
+
+  // 3) Floating-idle drift detection handles local clock skew > 5 min without recording fake cycles
+  const idleProbes = new Map();
+  const skewedNow1 = base0 + 12 * 3600_000; // local clock 10 min fast vs server
+  const serverNow1 = skewedNow1 - 10 * 60_000;
+  const idleQuota1 = {
+    connected: true,
+    accountHash: 'acc-skew',
+    groups: [
+      {
+        id: 'gemini',
+        family: 'gemini',
+        title: 'Gemini',
+        windows: [
+          {
+            kind: '5h',
+            windowId: 'gemini-5h',
+            remainingFraction: 1,
+            resetTime: new Date(serverNow1 + WINDOW_5H_MS).toISOString(),
+            disabled: false,
+          },
+        ],
+      },
+    ],
+  };
+  buildQuotaForecasts({ quota: idleQuota1, merged: { byMinute: {} }, calibration: {}, idleProbes, nowMs: skewedNow1 });
+  const skewedNow2 = skewedNow1 + 60_000;
+  const serverNow2 = serverNow1 + 60_000;
+  const { quota: resDrift, calibrationUpdates: updDrift } = buildQuotaForecasts({
+    quota: {
+      ...idleQuota1,
+      groups: [
+        {
+          ...idleQuota1.groups[0],
+          windows: [{ ...idleQuota1.groups[0].windows[0], resetTime: new Date(serverNow2 + WINDOW_5H_MS).toISOString() }],
+        },
+      ],
+    },
+    merged: { byMinute: {} },
+    calibration: {},
+    idleProbes,
+    nowMs: skewedNow2,
+  });
+  assert.equal(resDrift.groups[0].windows[0].forecast.cycleActive, false);
+  assert.equal(Object.keys(updDrift).length, 0);
+
+  // 4) Custom windowMinutes from RPC flows through normalizeQuotaSummary into forecast.windowMs
+  const parsedCustom = normalizeQuotaSummary({
+    response: {
+      groups: [
+        {
+          displayName: 'Custom Tier',
+          buckets: [{ bucketId: 'custom-daily', window: 'daily', windowMinutes: 1440, remainingFraction: 0.5, resetTime: new Date(nowMs + 12 * 3600_000).toISOString() }],
+        },
+      ],
+    },
+  });
+  assert.equal(parsedCustom[0].windows[0].windowMinutes, 1440);
+  const { quota: resCustom } = buildQuotaForecasts({
+    quota: { connected: true, accountHash: 'acc-cust', groups: parsedCustom },
+    merged: { byMinute: {} },
+    calibration: {},
+    nowMs,
+  });
+  assert.equal(resCustom.groups[0].windows[0].forecast.windowMs, 24 * 3600_000);
+
+  // 5) Cross-device quotaCalibration sync + background observeQuota
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-cal-sync-'));
+  try {
+    const syncDir = path.join(tmpRoot, 'shared');
+    const dataA = path.join(tmpRoot, 'devA');
+    const dataB = path.join(tmpRoot, 'devB');
+    const prevStart = nowMs - 12 * 86400_000;
+    const prevEnd = prevStart + WINDOW_7D_MS;
+    const nextStart = nowMs - 1 * 86400_000;
+    const nextEnd = nextStart + WINDOW_7D_MS;
+
+    const mgrA = new SyncManager({
+      paths: { pluginDataDir: dataA, conversationsDir: path.join(tmpRoot, 'cA'), summariesDb: path.join(tmpRoot, 'sA.db') },
+      collector: {
+        async collect() {
+          return {
+            collectedAt: nowMs,
+            conversationCount: 1,
+            totals: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 0, generations: 0, cacheHitRate: 0 },
+            latestGeneration: null,
+            byDate: {},
+            byModel: {},
+            bySlot: {},
+            byMinute: {},
+            recentConversations: [],
+          };
+        },
+      },
+      dataDir: dataA,
+    });
+    await mgrA.updateSettings({ syncMode: 'folder', syncDir, deviceName: 'Dev A' });
+
+    const svcA = await createDashboardService({
+      paths: { pluginDataDir: dataA, pluginConfig: path.join(tmpRoot, 'cfgA.json'), conversationsDir: path.join(tmpRoot, 'cA'), summariesDb: path.join(tmpRoot, 'sA.db') },
+      syncManager: mgrA,
+      quotaClient: {
+        async fetch() {
+          return {
+            connected: true,
+            accountHash: 'acc-sync',
+            groups: [
+              {
+                id: 'gemini',
+                family: 'gemini',
+                title: 'Gemini',
+                windows: [{ kind: 'weekly', windowId: 'gemini-weekly', remainingFraction: 0.75, resetTime: new Date(prevEnd).toISOString(), disabled: false }],
+              },
+            ],
+            fetchedAt: new Date().toISOString(),
+          };
+        },
+      },
+    });
+    await svcA.observeQuota({ forceQuota: true });
+    // Wait briefly for async calibration file flush then sync to shared folder
+    await new Promise((r) => setTimeout(r, 40));
+    await mgrA.syncOnce();
+
+    // Device B (empty local calibration) syncs from shared folder and sees Device A's recorded cycle!
+    const mgrB = new SyncManager({
+      paths: { pluginDataDir: dataB, conversationsDir: path.join(tmpRoot, 'cB'), summariesDb: path.join(tmpRoot, 'sB.db') },
+      collector: {
+        async collect() {
+          return {
+            collectedAt: nowMs,
+            conversationCount: 0,
+            totals: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: 0, generations: 0, cacheHitRate: 0 },
+            latestGeneration: null,
+            byDate: {},
+            byModel: {},
+            bySlot: {},
+            byMinute: {},
+            recentConversations: [],
+          };
+        },
+      },
+      dataDir: dataB,
+    });
+    await mgrB.updateSettings({ syncMode: 'folder', syncDir, deviceName: 'Dev B' });
+    const svcB = await createDashboardService({
+      paths: { pluginDataDir: dataB, pluginConfig: path.join(tmpRoot, 'cfgB.json'), conversationsDir: path.join(tmpRoot, 'cB'), summariesDb: path.join(tmpRoot, 'sB.db') },
+      syncManager: mgrB,
+      quotaClient: {
+        async fetch() {
+          return {
+            connected: true,
+            accountHash: 'acc-sync',
+            groups: [
+              {
+                id: 'gemini',
+                family: 'gemini',
+                title: 'Gemini',
+                windows: [{ kind: 'weekly', windowId: 'gemini-weekly', remainingFraction: 0.9, resetTime: new Date(nextEnd).toISOString(), disabled: false }],
+              },
+            ],
+            fetchedAt: new Date().toISOString(),
+          };
+        },
+      },
+    });
+    const dashB = await svcB.getDashboard({ forceSync: true, forceQuota: true });
+    const fcB = dashB.quota.groups[0].windows[0].forecast;
+    assert.equal(fcB.prevCycleSource, 'recorded');
+    assert.ok(Math.abs(fcB.prevCycleStartMs - prevStart) <= 1000);
+    assert.ok(Math.abs(fcB.prevCycleEndMs - prevEnd) <= 1000);
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('buildQuotaForecasts and computeCacheHitRate track cycle cache hit rates', () => {
+  assert.equal(computeCacheHitRate(2000, 8000), 0.8);
+  assert.equal(computeCacheHitRate(0, 0), 0);
+
+  const nowMs = Date.parse('2026-11-24T05:00:00Z');
+  const minCurr = Math.floor((nowMs - 30 * 60_000) / 60_000);
+  const minPrev = Math.floor((nowMs - 4 * 60 * 60_000) / 60_000);
+
+  const { quota } = buildQuotaForecasts({
+    nowMs,
+    quota: {
+      connected: true,
+      accountHash: 'acct',
+      groups: [
+        {
+          id: 'gemini',
+          title: 'Gemini',
+          family: 'gemini',
+          windows: [
+            {
+              kind: '5h',
+              windowMinutes: 300,
+              remainingFraction: 0.7,
+              resetTime: new Date(nowMs + 3 * 60 * 60_000).toISOString(),
+            },
+          ],
+        },
+      ],
+    },
+    merged: {
+      byMinute: {
+        [String(minCurr)]: {
+          gemini: { totalTokens: 10000, nonCacheTokens: 2500, inputTokens: 2000, cacheReadTokens: 7500, generations: 2 },
+        },
+        [String(minPrev)]: {
+          gemini: { totalTokens: 8000, nonCacheTokens: 4000, inputTokens: 3000, cacheReadTokens: 4000, generations: 1 },
+        },
+      },
+    },
+  });
+
+  const fc = quota.groups[0].windows[0].forecast;
+  assert.equal(fc.currInputTokens, 2000);
+  assert.equal(fc.currCacheReadTokens, 7500);
+  assert.equal(fc.currCacheHitRate, 0.7895);
+  assert.equal(fc.prevCacheHitRate, 0.5714);
 });

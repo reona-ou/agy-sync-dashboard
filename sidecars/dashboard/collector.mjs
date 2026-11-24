@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { SLOT_MS, TIMELINE_RETENTION_MS, classifyModelFamily } from './forecast.mjs';
+import { MINUTE_MS, SLOT_MS, TIMELINE_RETENTION_MS, classifyModelFamily } from './forecast.mjs';
 
 /**
  * Known model enum fallbacks when proto field g1[19] (modelId) or g1[21] (displayName) is omitted.
@@ -452,6 +452,13 @@ function resolveStepTimestamp(stepIndices, stepTimeMap, fallbackMs) {
   return { timestampMs: timestampMs || fallbackMs, streamWallMs };
 }
 
+export function computeCacheHitRate(inputTokens, cacheReadTokens) {
+  const inp = Number(inputTokens || 0);
+  const cr = Number(cacheReadTokens || 0);
+  const denom = inp + cr;
+  return denom > 0 ? Number((cr / denom).toFixed(4)) : 0;
+}
+
 function formatLatestGeneration(gen) {
   if (!gen) return null;
   const tps =
@@ -466,6 +473,7 @@ function formatLatestGeneration(gen) {
     outputTokens: gen.outputTokens,
     cacheReadTokens: gen.cacheReadTokens,
     totalTokens: gen.totalTokens,
+    cacheHitRate: computeCacheHitRate(gen.inputTokens, gen.cacheReadTokens),
     tps,
     ttftMs: gen.ttftMs,
   };
@@ -523,6 +531,7 @@ function buildContextFromRows(genRows, stepTimeMap, fallbackMs) {
     outputTokens: chosen.outputTokens,
     responseTokens: chosen.nonThinkingOutput,
     estimatedTokensUsed: chosen.estimatedTokensUsed,
+    cacheHitRate: computeCacheHitRate(chosen.inputTokens, chosen.cacheReadTokens),
     source,
     timestampMs,
   };
@@ -621,6 +630,23 @@ export function scanConversationDb(dbPath, summaryMeta = null) {
       contextInfo.latestGeneration = generations.length
         ? formatLatestGeneration(generations[generations.length - 1])
         : null;
+      const convSeen = new Map();
+      for (const gen of generations) {
+        const existing = convSeen.get(gen.dedupeKey);
+        if (!existing || gen.totalTokens > existing.totalTokens) {
+          convSeen.set(gen.dedupeKey, gen);
+        }
+      }
+      let sessionInputTokens = 0;
+      let sessionCacheReadTokens = 0;
+      for (const g of convSeen.values()) {
+        sessionInputTokens += Number(g.inputTokens || 0);
+        sessionCacheReadTokens += Number(g.cacheReadTokens || 0);
+      }
+      contextInfo.sessionInputTokens = sessionInputTokens;
+      contextInfo.sessionCacheReadTokens = sessionCacheReadTokens;
+      contextInfo.sessionCacheHitRate = computeCacheHitRate(sessionInputTokens, sessionCacheReadTokens);
+      contextInfo.sessionGenerations = convSeen.size;
     }
 
     return {
@@ -839,6 +865,7 @@ export class LocalUsageCollector {
     const byDate = Object.create(null);
     const byModel = Object.create(null);
     const bySlot = Object.create(null);
+    const byMinute = Object.create(null);
     const bySlotModel = Object.create(null);
     const slotCutoffMs = Date.now() - TIMELINE_RETENTION_MS;
     let latestGen = null;
@@ -851,15 +878,29 @@ export class LocalUsageCollector {
 
       if (gen.timestampMs >= slotCutoffMs) {
         const slotKey = String(Math.floor(gen.timestampMs / SLOT_MS));
+        const minKey = String(Math.floor(gen.timestampMs / MINUTE_MS));
         const fam = classifyModelFamily(gen.modelId, gen.displayName);
         if (!bySlot[slotKey]) bySlot[slotKey] = Object.create(null);
         if (!bySlot[slotKey][fam]) {
-          bySlot[slotKey][fam] = { totalTokens: 0, nonCacheTokens: 0, generations: 0 };
+          bySlot[slotKey][fam] = { totalTokens: 0, nonCacheTokens: 0, inputTokens: 0, cacheReadTokens: 0, generations: 0 };
         }
         const sb = bySlot[slotKey][fam];
         sb.totalTokens += gen.totalTokens;
         sb.nonCacheTokens += gen.inputTokens + gen.outputTokens;
+        sb.inputTokens += gen.inputTokens;
+        sb.cacheReadTokens += gen.cacheReadTokens;
         sb.generations += 1;
+
+        if (!byMinute[minKey]) byMinute[minKey] = Object.create(null);
+        if (!byMinute[minKey][fam]) {
+          byMinute[minKey][fam] = { totalTokens: 0, nonCacheTokens: 0, inputTokens: 0, cacheReadTokens: 0, generations: 0 };
+        }
+        const mb = byMinute[minKey][fam];
+        mb.totalTokens += gen.totalTokens;
+        mb.nonCacheTokens += gen.inputTokens + gen.outputTokens;
+        mb.inputTokens += gen.inputTokens;
+        mb.cacheReadTokens += gen.cacheReadTokens;
+        mb.generations += 1;
 
         if (!bySlotModel[slotKey]) bySlotModel[slotKey] = Object.create(null);
         if (!bySlotModel[slotKey][gen.modelId]) {
@@ -907,6 +948,7 @@ export class LocalUsageCollector {
       byDate,
       byModel,
       bySlot,
+      byMinute,
       bySlotModel,
       recentConversations,
     };

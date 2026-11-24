@@ -12,6 +12,7 @@ import {
   resolveModelMeta,
   toLocalDateKey,
 } from '../sidecars/dashboard/collector.mjs';
+import { MINUTE_MS } from '../sidecars/dashboard/forecast.mjs';
 
 function encodeVarint(num) {
   let v = BigInt(num);
@@ -229,8 +230,17 @@ test('LocalUsageCollector scans SQLite DBs and deduplicates shared responseId ac
     const todayKey = toLocalDateKey(ts1);
     assert.equal(snap.byDate[todayKey].totalTokens, 7600);
 
-    // Verify per-model 15-minute slot aggregation (bySlotModel)
+    // Verify per-model 15-minute slot aggregation (bySlotModel) and 1-minute family timeline (byMinute)
     assert.ok(snap.bySlotModel);
+    assert.ok(snap.byMinute);
+    assert.equal(
+      snap.byMinute[String(Math.floor(ts1 / MINUTE_MS))]?.['gemini']?.totalTokens,
+      5400
+    );
+    assert.equal(
+      snap.byMinute[String(Math.floor((ts1 + 5000) / MINUTE_MS))]?.['claude_gpt']?.totalTokens,
+      2200
+    );
     const slotModelTotals = {};
     for (const modelMap of Object.values(snap.bySlotModel)) {
       for (const [mId, bucket] of Object.entries(modelMap)) {

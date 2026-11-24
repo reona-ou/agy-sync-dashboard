@@ -84,13 +84,16 @@ export function normalizeQuotaSummary(response) {
       for (const w of rawWindows) {
         const wid = String(w.bucketId || w.windowId || w.id || '').toLowerCase();
         const winHint = String(w.window || w.windowName || w.name || '').toLowerCase();
-        const isWeekly = winHint === 'weekly' || wid.includes('week') || winHint.includes('week') || w.windowMinutes === 10080;
+        const rawWinMins = Number(w.windowMinutes);
+        const windowMinutes = Number.isFinite(rawWinMins) && rawWinMins > 0 ? rawWinMins : null;
+        const isWeekly = winHint === 'weekly' || wid.includes('week') || winHint.includes('week') || windowMinutes === 10080;
         const remaining = normalizeFraction(w.remainingFraction ?? w.remaining?.remainingFraction);
         windows.push({
           kind: isWeekly ? 'weekly' : '5h',
           windowId: String(w.bucketId || w.windowId || w.id || (isWeekly ? 'weekly' : '5h')),
           remainingFraction: remaining,
           resetTime: w.resetTime || null,
+          ...(windowMinutes !== null ? { windowMinutes } : {}),
           disabled: Boolean(w.disabled || w.isDisabled),
         });
       }
@@ -128,12 +131,15 @@ export function normalizeQuotaSummary(response) {
           windows: [],
         });
       }
-      const isWeekly = String(b.window || b.bucketId || b.id || '').toLowerCase().includes('week');
+      const isWeekly = String(b.window || b.bucketId || b.id || '').toLowerCase().includes('week') || Number(b.windowMinutes) === 10080;
+      const rawWinMins = Number(b.windowMinutes);
+      const windowMinutes = Number.isFinite(rawWinMins) && rawWinMins > 0 ? rawWinMins : null;
       grouped.get(fam).windows.push({
         kind: isWeekly ? 'weekly' : '5h',
         windowId: String(b.bucketId || b.id || ''),
         remainingFraction: normalizeFraction(b.remainingFraction ?? b.remaining?.remainingFraction),
         resetTime: b.resetTime || null,
+        ...(windowMinutes !== null ? { windowMinutes } : {}),
         disabled: Boolean(b.disabled),
       });
     }
@@ -254,6 +260,9 @@ export function parseRpcGeneratorContext(response) {
     source = 'estimate';
   }
 
+  const cacheDenom = chosen.inputTokens + chosen.cacheReadTokens;
+  const cacheHitRate = cacheDenom > 0 ? Number((chosen.cacheReadTokens / cacheDenom).toFixed(4)) : 0;
+
   return {
     modelId: chosen.modelId,
     displayName: chosen.displayName,
@@ -266,6 +275,7 @@ export function parseRpcGeneratorContext(response) {
     outputTokens: chosen.outputTokens,
     responseTokens: chosen.nonThinkingOutput,
     estimatedTokensUsed: chosen.estimatedTokensUsed,
+    cacheHitRate,
     source,
     timestampMs: Date.now(),
   };
@@ -283,6 +293,7 @@ export class QuotaClient {
     this.lastFetchedAt = 0;
     this.lastTrajectories = null;
     this.lastTrajectoriesAt = 0;
+    this.inFlightTrajectories = null;
   }
 
   async callWithEndpointRetry(method, body = {}) {
@@ -347,27 +358,35 @@ export class QuotaClient {
   }
 
   async fetchTrajectories(force = false) {
-    if (!force && this.lastTrajectories && Date.now() - this.lastTrajectoriesAt < 2_500) {
+    if (!force && this.lastTrajectories && Date.now() - this.lastTrajectoriesAt < 400) {
       return this.lastTrajectories;
     }
-    try {
-      const resp = await this.callWithEndpointRetry('GetAllCascadeTrajectories', {});
-      this.lastTrajectories = {
-        connected: true,
-        trajectories: normalizeTrajectorySummaries(resp),
-        fetchedAt: Date.now(),
-        error: null,
-      };
-      this.lastTrajectoriesAt = Date.now();
-      return this.lastTrajectories;
-    } catch (err) {
-      return {
-        connected: false,
-        trajectories: this.lastTrajectories?.trajectories || [],
-        fetchedAt: this.lastTrajectories?.fetchedAt || 0,
-        error: err instanceof Error ? err.message : String(err),
-      };
+    if (this.inFlightTrajectories) {
+      return this.inFlightTrajectories;
     }
+    this.inFlightTrajectories = (async () => {
+      try {
+        const resp = await this.callWithEndpointRetry('GetAllCascadeTrajectories', {});
+        this.lastTrajectories = {
+          connected: true,
+          trajectories: normalizeTrajectorySummaries(resp),
+          fetchedAt: Date.now(),
+          error: null,
+        };
+        this.lastTrajectoriesAt = Date.now();
+        return this.lastTrajectories;
+      } catch (err) {
+        return {
+          connected: false,
+          trajectories: this.lastTrajectories?.trajectories || [],
+          fetchedAt: this.lastTrajectories?.fetchedAt || 0,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      } finally {
+        this.inFlightTrajectories = null;
+      }
+    })();
+    return this.inFlightTrajectories;
   }
 
   async fetchTrajectoryContext(cascadeId) {

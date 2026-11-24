@@ -97,10 +97,46 @@ async function main() {
   const pinged = await pingRunningSidecar(runtimeFile, sessionMeta);
   if (pinged) return;
 
-  // Fallback when sidecar UI has not been launched yet: run direct snapshot sync.
-  const { SyncManager } = await import('../sidecars/dashboard/sync.mjs');
+  // Fallback when sidecar UI has not been launched yet: run direct snapshot sync + quota observation.
+  const [{ SyncManager }, { QuotaClient }, { buildQuotaForecasts, mergeCalibrationMaps }] = await Promise.all([
+    import('../sidecars/dashboard/sync.mjs'),
+    import('../sidecars/dashboard/quota.mjs'),
+    import('../sidecars/dashboard/forecast.mjs'),
+  ]);
   const manager = new SyncManager({ paths });
-  await manager.syncOnce();
+  const quotaClient = new QuotaClient(paths);
+  const fetchQuotaBounded = () =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), 2000);
+      timer.unref?.();
+      quotaClient
+        .fetch(true)
+        .then((q) => {
+          clearTimeout(timer);
+          resolve(q);
+        })
+        .catch(() => {
+          clearTimeout(timer);
+          resolve(null);
+        });
+    });
+
+  const [synced, rawQuota] = await Promise.all([manager.syncOnce(), fetchQuotaBounded()]);
+  if (rawQuota?.connected) {
+    const calibrationFile = path.join(paths.pluginDataDir, 'quota-calibration.json');
+    const localCal = readJsonSafe(calibrationFile, {});
+    const effectiveCal = mergeCalibrationMaps(synced?.merged?.quotaCalibration, localCal);
+    const { calibrationUpdates } = buildQuotaForecasts({
+      quota: rawQuota,
+      merged: synced?.merged,
+      calibration: effectiveCal,
+      nowMs: Date.now(),
+    });
+    if (calibrationUpdates && Object.keys(calibrationUpdates).length > 0) {
+      const nextCal = mergeCalibrationMaps(effectiveCal, calibrationUpdates);
+      await fsp.writeFile(calibrationFile, JSON.stringify(nextCal, null, 2) + '\n', 'utf8').catch(() => {});
+    }
+  }
 }
 
 main()

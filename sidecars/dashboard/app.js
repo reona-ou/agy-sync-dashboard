@@ -27,13 +27,29 @@
       quotaResetIn: (t) => `重置于 ${t}`,
       quotaDisabled: '不可用',
       fcCurrUsed: (v) => `本周期 ${v}`,
+      fcCurrCache: (v) => `本周期命中 ${v}`,
+      fcPrevCacheTip: (v) => `上周期缓存命中率：${v}`,
       fcPrevUsed: (v) => `上周期 ${v}`,
+      fcPrevEstUsed: (v) => `上周期(估) ${v}`,
+      fcPrior5hUsed: (v) => `本周期前5h ${v}`,
+      fcPrior7dUsed: (v) => `本周期前7天 ${v}`,
+      fcCurrCycleTip: (range, active) => (active ? `本周期区间：${range}` : '本周期尚未开始'),
+      fcPrevCycleTip: (range, srcLabel) => `统计区间：${range}${srcLabel ? `（${srcLabel}）` : ''}`,
+      fcPrevCycleSource: {
+        recorded: '已记录上周期',
+        timeline: '时间线推算',
+        adjacent: '本周期前窗口',
+      },
       fcEstRem: (v) => `预计剩余 ~${v}`,
       fcEstRemNone: '预计剩余 --',
       fcRateBasis: {
         'curr+prev': '当前+上周期',
         curr: '当前周期',
         prev: '上周期',
+        'curr+prior5h': '当前+本周期前5h',
+        prior5h: '本周期前5h',
+        'curr+prior7d': '当前+本周期前7天',
+        prior7d: '本周期前7天',
         none: '无消耗',
       },
       fcRunwaySafe: (d) => `可用 ~${d}（可撑至重置）`,
@@ -140,6 +156,7 @@
       ctxActiveBadge: '当前',
       ctxPending: '当前会话尚未产生模型调用，发送消息后将显示上下文占用。',
       ctxEmpty: '暂未检测到本地对话记录。',
+      cacheRateShort: (v) => `命中率 ${v}`,
       inTok: '输入',
       outTok: '输出',
       cacheTok: '缓存命中',
@@ -173,13 +190,29 @@
       quotaResetIn: (t) => `Resets in ${t}`,
       quotaDisabled: 'Unavailable',
       fcCurrUsed: (v) => `Curr ${v}`,
+      fcCurrCache: (v) => `Cache ${v}`,
+      fcPrevCacheTip: (v) => `Prev cycle cache hit: ${v}`,
       fcPrevUsed: (v) => `Prev ${v}`,
+      fcPrevEstUsed: (v) => `Prev (est.) ${v}`,
+      fcPrior5hUsed: (v) => `Prior 5h ${v}`,
+      fcPrior7dUsed: (v) => `Prior 7d ${v}`,
+      fcCurrCycleTip: (range, active) => (active ? `Current cycle: ${range}` : 'Current cycle not started yet'),
+      fcPrevCycleTip: (range, srcLabel) => `Window: ${range}${srcLabel ? ` (${srcLabel})` : ''}`,
+      fcPrevCycleSource: {
+        recorded: 'recorded cycle',
+        timeline: 'estimated from timeline',
+        adjacent: 'window before current cycle',
+      },
       fcEstRem: (v) => `Est. left ~${v}`,
       fcEstRemNone: 'Est. left --',
       fcRateBasis: {
         'curr+prev': 'curr+prev cycles',
         curr: 'current cycle',
         prev: 'previous cycle',
+        'curr+prior5h': 'curr+prior 5h',
+        prior5h: 'prior 5h',
+        'curr+prior7d': 'curr+prior 7d',
+        prior7d: 'prior 7d',
         none: 'no usage',
       },
       fcRunwaySafe: (d) => `~${d} left (lasts past reset)`,
@@ -286,6 +319,7 @@
       ctxActiveBadge: 'Active',
       ctxPending: 'No model turns in this session yet. Send a message to see context usage.',
       ctxEmpty: 'No local conversations found yet.',
+      cacheRateShort: (v) => `Hit ${v}`,
       inTok: 'In',
       outTok: 'Out',
       cacheTok: 'Cache',
@@ -319,13 +353,29 @@
       quotaResetIn: (t) => `リセットまで ${t}`,
       quotaDisabled: '利用不可',
       fcCurrUsed: (v) => `今周期 ${v}`,
+      fcCurrCache: (v) => `キャッシュ ${v}`,
+      fcPrevCacheTip: (v) => `前周期キャッシュヒット率: ${v}`,
       fcPrevUsed: (v) => `前周期 ${v}`,
+      fcPrevEstUsed: (v) => `前周期(推定) ${v}`,
+      fcPrior5hUsed: (v) => `直前5h ${v}`,
+      fcPrior7dUsed: (v) => `直前7日 ${v}`,
+      fcCurrCycleTip: (range, active) => (active ? `今周期の範囲: ${range}` : '今周期はまだ開始されていません'),
+      fcPrevCycleTip: (range, srcLabel) => `集計区間: ${range}${srcLabel ? `（${srcLabel}）` : ''}`,
+      fcPrevCycleSource: {
+        recorded: '記録済み前周期',
+        timeline: '履歴から推定',
+        adjacent: '今周期の直前ウィンドウ',
+      },
       fcEstRem: (v) => `推定残量 ~${v}`,
       fcEstRemNone: '推定残量 --',
       fcRateBasis: {
         'curr+prev': '今周期+前周期',
         curr: '今周期',
         prev: '前周期',
+        'curr+prior5h': '今周期+直前5h',
+        prior5h: '直前5h',
+        'curr+prior7d': '今周期+直前7日',
+        prior7d: '直前7日',
         none: '消費なし',
       },
       fcRunwaySafe: (d) => `残り ~${d}（リセットまで持続）`,
@@ -432,6 +482,7 @@
       ctxActiveBadge: '現在',
       ctxPending: 'この会話ではまだモデル呼び出しがありません。メッセージ送信後に表示されます。',
       ctxEmpty: 'ローカルの会話履歴がまだ見つかりません。',
+      cacheRateShort: (v) => `ヒット率 ${v}`,
       inTok: '入力',
       outTok: '出力',
       cacheTok: 'キャッシュ',
@@ -464,9 +515,11 @@
     lastRevision: null,
     lastContextSig: '',
     versionEndpointSupported: true,
+    sessionContextEndpointSupported: true,
     refreshIntervalMs: 30000,
     lastDashboardFetchAt: 0,
     inFlightLoad: null,
+    inFlightContextLoad: null,
     fullRefreshTimer: null,
   };
 
@@ -600,6 +653,13 @@
     return `${(Number(ratio || 0) * 100).toFixed(1)}%`;
   }
 
+  function calcCacheRate(inputTokens, cacheReadTokens) {
+    const inp = Number(inputTokens || 0);
+    const cr = Number(cacheReadTokens || 0);
+    const denom = inp + cr;
+    return denom > 0 ? cr / denom : 0;
+  }
+
   function fmtRelative(ms) {
     if (!ms) return '--';
     const diffSec = Math.max(0, Math.floor((Date.now() - Number(ms)) / 1000));
@@ -635,6 +695,21 @@
     const target = Date.parse(isoTime);
     if (!Number.isFinite(target)) return '';
     return fmtDurationMs(Math.max(0, target - Date.now()));
+  }
+
+  function fmtCyclePoint(ms) {
+    if (!Number.isFinite(ms)) return '';
+    const d = new Date(ms);
+    const mon = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hr = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${mon}/${day} ${hr}:${min}`;
+  }
+
+  function fmtCycleRange(startMs, endMs) {
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return '';
+    return `${fmtCyclePoint(startMs)} ~ ${fmtCyclePoint(endMs)}`;
   }
 
   function quotaLevelClass(frac) {
@@ -812,12 +887,13 @@
           : current.source === 'usage'
             ? dict.ctxSourceExact
             : '';
+      const srcHint = sessionContext?.detectionSource ? ` (${sessionContext.detectionSource})` : '';
       box.appendChild(
         el('div', { className: 'ctx-conv-row' }, [
           el('span', {
             className: 'ctx-conv-name',
             text: current.title || current.conversationId,
-            title: current.title || current.conversationId,
+            title: `${current.title || current.conversationId}${srcHint}`,
           }),
           statusText
             ? el('span', {
@@ -863,6 +939,19 @@
         if (current.responseTokens > 0) {
           metaItems.push(el('span', { text: `${dict.outTok} ${fmtTokens(current.responseTokens)}` }));
         }
+        const hasSessionCache =
+          Number(current.sessionInputTokens || 0) + Number(current.sessionCacheReadTokens || 0) > 0;
+        const hasTurnCache = Number(current.inputTokens || 0) + Number(current.cacheReadTokens || 0) > 0;
+        if (hasSessionCache || hasTurnCache) {
+          const sessionRate = hasSessionCache
+            ? typeof current.sessionCacheHitRate === 'number'
+              ? current.sessionCacheHitRate
+              : calcCacheRate(current.sessionInputTokens, current.sessionCacheReadTokens)
+            : typeof current.cacheHitRate === 'number'
+              ? current.cacheHitRate
+              : calcCacheRate(current.inputTokens, current.cacheReadTokens);
+          metaItems.push(el('span', { text: `${dict.cacheTok} ${fmtPct(sessionRate)}` }));
+        }
         if (current.estimatedTokensUsed > 0 && current.source === 'usage') {
           metaItems.push(el('span', { text: dict.ctxEstLabel(fmtTokens(current.estimatedTokensUsed)) }));
         }
@@ -883,6 +972,13 @@
         el('span', { className: 'ctx-gen-label', text: dict.ctxLatestGen }),
         el('span', { text: `${fmtTokens(genInfo.totalTokens)} tok` }),
       ];
+      if (Number(genInfo.inputTokens || 0) + Number(genInfo.cacheReadTokens || 0) > 0) {
+        const genCacheRate =
+          typeof genInfo.cacheHitRate === 'number'
+            ? genInfo.cacheHitRate
+            : calcCacheRate(genInfo.inputTokens, genInfo.cacheReadTokens);
+        genItems.push(el('span', { text: dict.cacheRateShort(fmtPct(genCacheRate)) }));
+      }
       if (genInfo.tps > 0) {
         genItems.push(el('span', { text: `${genInfo.tps} tok/s` }));
       }
@@ -950,8 +1046,18 @@
 
         const fc = win.forecast;
         if (fc) {
+          const prevValText = fmtTokens(fc.prevUsedTokens || 0);
+          const prevSrc = fc.prevCycleSource || 'adjacent';
+          const isWeekly = fc.kind === 'weekly';
           const currStr = dict.fcCurrUsed(fmtTokens(fc.currUsedTokens || 0));
-          const prevStr = dict.fcPrevUsed(fmtTokens(fc.prevUsedTokens || 0));
+          const prevStr =
+            prevSrc === 'recorded'
+              ? dict.fcPrevUsed(prevValText)
+              : prevSrc === 'timeline'
+                ? dict.fcPrevEstUsed(prevValText)
+                : isWeekly
+                  ? dict.fcPrior7dUsed(prevValText)
+                  : dict.fcPrior5hUsed(prevValText);
           const remStr =
             fc.estimatedRemainingTokens !== null && fc.estimatedRemainingTokens !== undefined
               ? dict.fcEstRem(fmtTokens(fc.estimatedRemainingTokens))
@@ -975,18 +1081,45 @@
             }
           }
 
-          const basisLabel = dict.fcRateBasis[fc.rateSource || 'none'] || fc.rateSource;
+          let rateBasisKey = fc.rateSource || 'none';
+          if (prevSrc === 'adjacent' && (rateBasisKey === 'curr+prev' || rateBasisKey === 'prev')) {
+            rateBasisKey =
+              rateBasisKey === 'curr+prev'
+                ? isWeekly
+                  ? 'curr+prior7d'
+                  : 'curr+prior5h'
+                : isWeekly
+                  ? 'prior7d'
+                  : 'prior5h';
+          }
+          const basisLabel = dict.fcRateBasis[rateBasisKey] || dict.fcRateBasis[fc.rateSource || 'none'] || rateBasisKey;
           const rateTip =
             fc.burnRatePerHour > 0 ? dict.fcRateTip(fmtTokens(fc.burnRatePerHour), basisLabel) : '';
+          const currRange = fmtCycleRange(fc.cycleStartMs, fc.cycleEndMs);
+          const currTip = currRange ? dict.fcCurrCycleTip(currRange, fc.cycleActive !== false) : '';
+          const prevRange = fmtCycleRange(fc.prevCycleStartMs, fc.prevCycleEndMs);
+          const prevSrcLabel = dict.fcPrevCycleSource?.[fc.prevCycleSource] || '';
+          const prevTip = prevRange ? dict.fcPrevCycleTip(prevRange, prevSrcLabel) : '';
+
+          const currCacheEl =
+            fc.currCacheHitRate !== null && fc.currCacheHitRate !== undefined
+              ? el('span', {
+                  text: dict.fcCurrCache(fmtPct(fc.currCacheHitRate)),
+                  ...(fc.prevCacheHitRate !== null && fc.prevCacheHitRate !== undefined
+                    ? { title: dict.fcPrevCacheTip(fmtPct(fc.prevCacheHitRate)) }
+                    : {}),
+                })
+              : null;
 
           const fcBox = el(
             'div',
             { className: 'quota-forecast', ...(rateTip ? { title: rateTip } : {}) },
             [
               el('div', { className: 'forecast-metrics' }, [
-                el('span', { text: currStr }),
-                el('span', { text: prevStr }),
+                el('span', { text: currStr, ...(currTip ? { title: currTip } : {}) }),
+                el('span', { text: prevStr, ...(prevTip ? { title: prevTip } : {}) }),
                 el('span', { text: remStr }),
+                currCacheEl,
               ]),
               el('div', { className: 'forecast-foot' }, [
                 el('span', { className: runwayClass, text: runwayText }),
@@ -1055,7 +1188,8 @@
       if (!b || !b.totalTokens) {
         detail.textContent = `${dk}: 0`;
       } else {
-        detail.textContent = `${dk}: ${fmtTokens(b.totalTokens)} (${dict.inTok} ${fmtTokens(b.inputTokens)} / ${dict.cacheTok} ${fmtTokens(b.cacheReadTokens)} / ${dict.outTok} ${fmtTokens(b.outputTokens)} · ${b.generations} ${dict.gens})`;
+        const dayCache = calcCacheRate(b.inputTokens, b.cacheReadTokens);
+        detail.textContent = `${dk}: ${fmtTokens(b.totalTokens)} (${dict.inTok} ${fmtTokens(b.inputTokens)} / ${dict.cacheTok} ${fmtTokens(b.cacheReadTokens)} (${fmtPct(dayCache)}) / ${dict.outTok} ${fmtTokens(b.outputTokens)} · ${b.generations} ${dict.gens})`;
       }
       Array.from(bars.children).forEach((col, idx) => {
         const active = dates[idx] === dk;
@@ -1103,7 +1237,8 @@
 
     // Leading metric gets a day-over-day delta; no extra node, same sub line.
     const todaySubText = () => {
-      const base = `${dict.inTok} ${fmtTokens(today.inputTokens)} · ${dict.outTok} ${fmtTokens(today.outputTokens)}`;
+      const todayCache = calcCacheRate(today.inputTokens, today.cacheReadTokens);
+      const base = `${dict.inTok} ${fmtTokens(today.inputTokens)} · ${dict.outTok} ${fmtTokens(today.outputTokens)} · ${dict.cacheRateShort(fmtPct(todayCache))}`;
       const yest = new Date(`${merged.todayKey}T00:00:00`);
       yest.setDate(yest.getDate() - 1);
       const yestKey = `${yest.getFullYear()}-${String(yest.getMonth() + 1).padStart(2, '0')}-${String(
@@ -1236,6 +1371,9 @@
         }
 
         const metaLeftParts = [`${c.deviceName} · ${c.generations} ${dict.gens}`];
+        if (Number(c.inputTokens || 0) + Number(c.cacheReadTokens || 0) > 0) {
+          metaLeftParts.push(dict.cacheRateShort(fmtPct(calcCacheRate(c.inputTokens, c.cacheReadTokens))));
+        }
         if (c.latestGeneration?.tps > 0) {
           metaLeftParts.push(`${c.latestGeneration.tps} tok/s`);
         }
@@ -1698,7 +1836,9 @@
               ]),
               el('div', { className: 'entity-sub' }, [
                 el('span', { text: `${dict.inTok} ${fmtTokens(pBucket.inputTokens || 0)}` }),
-                el('span', { text: `${dict.cacheTok} ${fmtTokens(pBucket.cacheReadTokens || 0)}` }),
+                el('span', {
+                  text: `${dict.cacheTok} ${fmtTokens(pBucket.cacheReadTokens || 0)} (${fmtPct(pBucket.cacheHitRate || 0)})`,
+                }),
                 el('span', { text: `${dict.outTok} ${fmtTokens(pBucket.outputTokens || 0)}` }),
                 el('span', { text: `${Number(pBucket.generations || 0)} ${dict.gens} · ${fmtPct(share)}` }),
               ]),
@@ -1787,16 +1927,18 @@
     }, intervalMs);
   }
 
+  function contextSignature(cur) {
+    if (!cur || !cur.conversationId) return '';
+    return `${cur.conversationId}|${cur.usedTokens || 0}|${cur.maxContextTokens || 0}|${cur.isRunning ? 1 : 0}`;
+  }
+
   function renderAll(data, opts) {
     state.dashboard = data;
     state.lastDashboardFetchAt = Date.now();
     if (typeof data?.revision === 'number') {
       state.lastRevision = data.revision;
     }
-    const ctxCur = data?.sessionContext?.current;
-    state.lastContextSig = ctxCur
-      ? `${ctxCur.conversationId}|${ctxCur.usedTokens}|${ctxCur.maxContextTokens}`
-      : '';
+    state.lastContextSig = contextSignature(data?.sessionContext?.current);
     const nextInterval = Math.max(3000, Number(data?.settings?.syncIntervalMs || 30000));
     if (nextInterval !== state.refreshIntervalMs || !state.fullRefreshTimer) {
       state.refreshIntervalMs = nextInterval;
@@ -1832,6 +1974,49 @@
         }
       });
     state.inFlightLoad = pending;
+    return pending;
+  }
+
+  async function loadSessionContext(opts) {
+    if (!state.dashboard || !state.sessionContextEndpointSupported) {
+      return loadDashboard(opts);
+    }
+    if (state.inFlightContextLoad && !opts?.force) {
+      return state.inFlightContextLoad;
+    }
+    const q = new URLSearchParams();
+    if (opts?.force) q.set('force', '1');
+    const suffix = q.toString() ? `?${q.toString()}` : '';
+    const pending = apiFetch(`/api/session-context${suffix}`, { method: 'GET' })
+      .then(async (res) => {
+        if (res.status === 404) {
+          state.sessionContextEndpointSupported = false;
+          return loadDashboard(opts);
+        }
+        if (!res.ok) {
+          return loadDashboard(opts);
+        }
+        const payload = await res.json();
+        if (payload?.sessionContext && state.dashboard) {
+          state.dashboard = {
+            ...state.dashboard,
+            sessionContext: payload.sessionContext,
+          };
+          state.lastContextSig = contextSignature(payload.sessionContext.current);
+          renderOverview(state.dashboard);
+        }
+        if (typeof payload?.revision === 'number' && payload.revision !== state.lastRevision) {
+          void loadDashboard().catch(() => {});
+        }
+        return payload;
+      })
+      .catch(() => loadDashboard(opts))
+      .finally(() => {
+        if (state.inFlightContextLoad === pending) {
+          state.inFlightContextLoad = null;
+        }
+      });
+    state.inFlightContextLoad = pending;
     return pending;
   }
 
@@ -2042,15 +2227,17 @@
 
   function startAutoRefresh() {
     scheduleFullRefreshTimer();
+    let inFlightVersionCheck = false;
 
     const checkForUpdates = async () => {
-      if (document.hidden || state.inFlightLoad || state.syncing) return;
+      if (document.hidden || state.syncing || inFlightVersionCheck) return;
       if (!state.versionEndpointSupported) {
-        if (Date.now() - state.lastDashboardFetchAt >= 5000) {
+        if (!state.inFlightLoad && Date.now() - state.lastDashboardFetchAt >= 5000) {
           await loadDashboard().catch(() => {});
         }
         return;
       }
+      inFlightVersionCheck = true;
       try {
         const res = await apiFetch('/api/version', { method: 'GET' });
         if (res.status === 404) {
@@ -2059,21 +2246,28 @@
         }
         if (!res.ok) return;
         const ver = await res.json();
+        const revChanged = typeof ver?.revision === 'number' && ver.revision !== state.lastRevision;
         const verCtxSig = ver?.activeConvId
-          ? `${ver.activeConvId}|${ver.activeUsedTokens || 0}|${ver.activeMaxContextTokens || 0}`
+          ? `${ver.activeConvId}|${ver.activeUsedTokens || 0}|${ver.activeMaxContextTokens || 0}|${ver.activeIsRunning ? 1 : 0}`
           : '';
         const ctxChanged = Boolean(verCtxSig && verCtxSig !== state.lastContextSig);
-        if ((typeof ver?.revision === 'number' && ver.revision !== state.lastRevision) || ctxChanged) {
-          await loadDashboard().catch(() => {});
+        if (revChanged) {
+          if (!state.inFlightLoad) {
+            await loadDashboard().catch(() => {});
+          }
+        } else if (ctxChanged) {
+          await loadSessionContext().catch(() => {});
         }
       } catch {
         // Ignore transient network errors during sidecar reload
+      } finally {
+        inFlightVersionCheck = false;
       }
     };
 
     setInterval(() => {
       void checkForUpdates();
-    }, 3000);
+    }, 1000);
 
     setInterval(() => {
       if (document.hidden || !state.dashboard || state.inFlightLoad) return;
@@ -2082,11 +2276,13 @@
 
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) {
+        if (state.dashboard) void loadSessionContext({ force: true }).catch(() => {});
         void loadDashboard({ force: true }).catch(() => {});
       }
     });
 
     window.addEventListener('focus', () => {
+      if (state.dashboard) void loadSessionContext({ force: true }).catch(() => {});
       if (Date.now() - state.lastDashboardFetchAt > 2500) {
         void loadDashboard().catch(() => {});
       }

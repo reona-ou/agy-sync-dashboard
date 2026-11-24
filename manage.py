@@ -29,6 +29,11 @@ RUNTIME_ITEMS = [
     "sidecars",
 ]
 
+OBSOLETE_RUNTIME_ITEMS = [
+    "mcp_config.json",
+    "mcp",
+]
+
 
 def is_running_in_conda_env(env_name: str = CONDA_ENV_NAME) -> bool:
     try:
@@ -296,6 +301,15 @@ def write_json_atomic(path: Path, data: dict) -> None:
 def copy_runtime_tree(src_root: Path, dst_root: Path) -> None:
     dst_root.mkdir(parents=True, exist_ok=True)
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store", "Thumbs.db", ".git", ".scratch")
+    for obsolete_name in OBSOLETE_RUNTIME_ITEMS:
+        obsolete = dst_root / obsolete_name
+        if obsolete.is_dir():
+            shutil.rmtree(obsolete, ignore_errors=True)
+        elif obsolete.exists():
+            try:
+                obsolete.unlink()
+            except OSError:
+                pass
     for item_name in RUNTIME_ITEMS:
         src = src_root / item_name
         dst = dst_root / item_name

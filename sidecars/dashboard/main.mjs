@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { readHostTheme } from '../../compat/host-theme.mjs';
 import { readJsonSafe, resolvePaths } from '../../compat/platform.mjs';
 import { loadSidecarSdk } from '../../compat/sdk.mjs';
-import { buildQuotaForecasts } from './forecast.mjs';
+import { buildQuotaForecasts, mergeCalibrationMaps } from './forecast.mjs';
 import { QuotaClient } from './quota.mjs';
 import { SyncManager, sanitizeSettingsForClient } from './sync.mjs';
 
@@ -169,6 +169,7 @@ export async function createDashboardService(options = {}) {
   let calibration = readJsonSafe(calibrationFile, {});
   if (!calibration || typeof calibration !== 'object') calibration = {};
   let lastHookSession = readJsonSafe(activeSessionFile, null);
+  const idleProbes = new Map();
 
   function recordActiveSession(meta) {
     if (!meta?.conversationId) return;
@@ -188,35 +189,58 @@ export async function createDashboardService(options = {}) {
   }
 
   function applyForecastAndStrip(synced, quota) {
+    const effectiveCalibration = mergeCalibrationMaps(synced?.merged?.quotaCalibration, calibration);
     const { quota: enrichedQuota, calibrationUpdates } = buildQuotaForecasts({
       quota,
       merged: synced?.merged,
-      calibration,
+      calibration: effectiveCalibration,
+      idleProbes,
       nowMs: Date.now(),
     });
     if (calibrationUpdates && Object.keys(calibrationUpdates).length > 0) {
-      calibration = { ...calibration, ...calibrationUpdates };
+      calibration = mergeCalibrationMaps(effectiveCalibration, calibrationUpdates);
       void fsp
         .writeFile(calibrationFile, JSON.stringify(calibration, null, 2) + '\n', 'utf8')
         .catch(() => {});
     }
     const cleanSynced = synced ? { ...synced } : synced;
     if (cleanSynced?.merged) {
-      const { bySlot: _bs, bySlotModel: _bsm, legacyByDate: _lbd, ...restMerged } = cleanSynced.merged;
+      const {
+        bySlot: _bs,
+        bySlotModel: _bsm,
+        byMinute: _bm,
+        fallbackBySlot: _fbs,
+        legacyByDate: _lbd,
+        quotaCalibration: _qc,
+        ...restMerged
+      } = cleanSynced.merged;
       cleanSynced.merged = restMerged;
     }
     if (cleanSynced?.device?.local) {
-      const { bySlot: _lbs, bySlotModel: _lbsm, ...restLocal } = cleanSynced.device.local;
+      const { bySlot: _lbs, bySlotModel: _lbsm, byMinute: _lbm, ...restLocal } = cleanSynced.device.local;
       cleanSynced.device = { ...cleanSynced.device, local: restLocal };
     }
     return { quota: enrichedQuota, cleanSynced };
   }
 
-  async function buildSessionContext(requestedConvId = 'auto', { forceTrajectories = false } = {}) {
+  async function observeQuota({ forceQuota = false, synced = null } = {}) {
+    if (typeof quotaClient?.fetch !== 'function') return null;
+    const data = synced || syncManager.lastMerged || (await runSync());
+    const rawQuota = await quotaClient.fetch(forceQuota).catch(() => null);
+    if (!rawQuota || !rawQuota.connected) return rawQuota;
+    applyForecastAndStrip(data, rawQuota);
+    return rawQuota;
+  }
+
+  async function buildSessionContext(
+    requestedConvId = 'auto',
+    { forceTrajectories = false, includeList = true } = {}
+  ) {
     const collector = syncManager.collector;
-    const localList = typeof collector?.listConversationContexts === 'function'
-      ? collector.listConversationContexts(20)
-      : [];
+    const localList =
+      includeList && typeof collector?.listConversationContexts === 'function'
+        ? collector.listConversationContexts(20)
+        : [];
     const localMap = new Map(localList.map((c) => [c.conversationId, c]));
 
     let trajectories = [];
@@ -256,18 +280,22 @@ export async function createDashboardService(options = {}) {
       });
 
       const topTraj = sortedTrajs[0] || null;
-      const topViewOrMod = topTraj ? (topTraj.lastUserViewMs || topTraj.lastModifiedMs || 0) : 0;
-      const hookAt = Number(hookSession?.updatedAt || 0);
-
-      if (hookSession?.conversationId && (!topTraj || hookAt > topViewOrMod)) {
-        activeConvId = hookSession.conversationId;
-        detectionSource = 'hook';
-      } else if (topTraj) {
+      if (topTraj) {
         activeConvId = topTraj.conversationId;
         detectionSource = topTraj.lastUserViewMs > 0 ? 'live-view' : 'live-recent';
-      } else if (localList.length > 0) {
-        activeConvId = localList[0].conversationId;
-        detectionSource = 'recent-db';
+      } else if (hookSession?.conversationId) {
+        activeConvId = hookSession.conversationId;
+        detectionSource = 'hook';
+      } else {
+        const fallbackList = localList.length
+          ? localList
+          : typeof collector?.listConversationContexts === 'function'
+            ? collector.listConversationContexts(1)
+            : [];
+        if (fallbackList.length > 0) {
+          activeConvId = fallbackList[0].conversationId;
+          detectionSource = 'recent-db';
+        }
       }
     }
 
@@ -291,6 +319,25 @@ export async function createDashboardService(options = {}) {
       const remainingTokens = maxContextTokens > 0 ? Math.max(0, maxContextTokens - usedTokens) : 0;
       const usageRatio = maxContextTokens > 0 ? usedTokens / maxContextTokens : 0;
 
+      const inputTokens = Number(ctx?.inputTokens || 0);
+      const cacheReadTokens = Number(ctx?.cacheReadTokens || 0);
+      const cacheDenom = inputTokens + cacheReadTokens;
+      const cacheHitRate =
+        typeof ctx?.cacheHitRate === 'number'
+          ? ctx.cacheHitRate
+          : cacheDenom > 0
+            ? Number((cacheReadTokens / cacheDenom).toFixed(4))
+            : 0;
+      const sessionInputTokens = Number(ctx?.sessionInputTokens || 0);
+      const sessionCacheReadTokens = Number(ctx?.sessionCacheReadTokens || 0);
+      const sessionCacheDenom = sessionInputTokens + sessionCacheReadTokens;
+      const sessionCacheHitRate =
+        typeof ctx?.sessionCacheHitRate === 'number'
+          ? ctx.sessionCacheHitRate
+          : sessionCacheDenom > 0
+            ? Number((sessionCacheReadTokens / sessionCacheDenom).toFixed(4))
+            : 0;
+
       return {
         conversationId: convId,
         title: traj?.title || localEntry?.title || convId.slice(0, 8),
@@ -301,12 +348,17 @@ export async function createDashboardService(options = {}) {
         remainingTokens,
         usageRatio,
         promptTokens: Number(ctx?.promptTokens || 0),
-        inputTokens: Number(ctx?.inputTokens || 0),
-        cacheReadTokens: Number(ctx?.cacheReadTokens || 0),
+        inputTokens,
+        cacheReadTokens,
         cacheWriteTokens: Number(ctx?.cacheWriteTokens || 0),
         outputTokens: Number(ctx?.outputTokens || 0),
         responseTokens: Number(ctx?.responseTokens || 0),
         estimatedTokensUsed: Number(ctx?.estimatedTokensUsed || 0),
+        cacheHitRate,
+        sessionInputTokens,
+        sessionCacheReadTokens,
+        sessionCacheHitRate,
+        sessionGenerations: Number(ctx?.sessionGenerations || 0),
         source: ctx?.source || 'empty',
         latestGeneration: ctx?.latestGeneration || null,
         isRunning: Boolean(traj?.isRunning),
@@ -316,6 +368,16 @@ export async function createDashboardService(options = {}) {
     };
 
     const current = await resolveDetail(activeConvId);
+
+    if (!includeList) {
+      return {
+        selectionMode: isManual ? 'manual' : 'auto',
+        activeConversationId: activeConvId,
+        detectionSource,
+        current,
+        conversations: [],
+      };
+    }
 
     // Build compact selector list combining live trajectories and recent local conversations.
     const seenIds = new Set();
@@ -414,9 +476,17 @@ export async function createDashboardService(options = {}) {
     };
   }
 
-  async function getVersion() {
+  async function getSessionContext({ convId = 'auto', forceTrajectories = false } = {}) {
+    const sessionContext = await buildSessionContext(convId, { forceTrajectories, includeList: true });
+    return {
+      revision,
+      sessionContext,
+    };
+  }
+
+  async function getVersion(convId = 'auto') {
     const merged = syncManager.lastMerged;
-    const ctxSnap = await buildSessionContext('auto', { forceTrajectories: false }).catch(() => null);
+    const ctxSnap = await buildSessionContext(convId, { forceTrajectories: false, includeList: false }).catch(() => null);
     return {
       revision,
       lastSyncAt: merged?.syncStatus?.lastSyncAt || syncManager.lastSyncAt || 0,
@@ -426,6 +496,7 @@ export async function createDashboardService(options = {}) {
       activeConvId: ctxSnap?.current?.conversationId || null,
       activeUsedTokens: ctxSnap?.current?.usedTokens || 0,
       activeMaxContextTokens: ctxSnap?.current?.maxContextTokens || 0,
+      activeIsRunning: Boolean(ctxSnap?.current?.isRunning),
     };
   }
 
@@ -475,8 +546,10 @@ export async function createDashboardService(options = {}) {
     syncManager,
     quotaClient,
     runSync,
+    observeQuota,
     recordActiveSession,
     getDashboard,
+    getSessionContext,
     getVersion,
     updateSettings,
     getSettings,
@@ -533,7 +606,15 @@ export function createStandaloneHttpServer(service, options = {}) {
 
     try {
       if (url.pathname === '/api/version' && req.method === 'GET') {
-        sendJson(200, await service.getVersion());
+        const convId = url.searchParams.get('convId') || 'auto';
+        sendJson(200, await service.getVersion(convId));
+        return;
+      }
+
+      if (url.pathname === '/api/session-context' && req.method === 'GET') {
+        const convId = url.searchParams.get('convId') || 'auto';
+        const forceTrajectories = url.searchParams.get('force') === '1';
+        sendJson(200, await service.getSessionContext({ convId, forceTrajectories }));
         return;
       }
 
@@ -639,7 +720,10 @@ async function startRuntime() {
   } catch {}
 
   const service = await createDashboardService({ paths });
-  await service.runSync().catch(() => {});
+  const initialSynced = await service.runSync().catch(() => null);
+  if (initialSynced) {
+    void service.observeQuota({ forceQuota: false, synced: initialSynced }).catch(() => {});
+  }
 
   const controlToken = crypto.randomBytes(16).toString('hex');
   const runtimeFile = path.join(paths.pluginDataDir, 'sidecar-runtime.json');
@@ -711,12 +795,24 @@ async function startRuntime() {
     } catch {}
   };
 
+  const BG_QUOTA_INTERVAL_MS = 60_000;
+  let lastBgQuotaAt = 0;
+
   const configureBackgroundJobs = async (overrideSettings = null) => {
     const settings = overrideSettings || (await service.getSettings()).settings;
     const intervalMs = Math.max(3_000, Number(settings?.syncIntervalMs || 30_000));
     if (bgTimer) clearInterval(bgTimer);
     bgTimer = setInterval(() => {
-      void service.runSync().catch(() => {});
+      void service
+        .runSync()
+        .then((synced) => {
+          if (synced && Date.now() - lastBgQuotaAt >= BG_QUOTA_INTERVAL_MS) {
+            lastBgQuotaAt = Date.now();
+            return service.observeQuota({ forceQuota: false, synced });
+          }
+          return null;
+        })
+        .catch(() => {});
     }, intervalMs);
     bgTimer.unref();
     attachConversationsWatcher();
@@ -797,7 +893,24 @@ async function startRuntime() {
       'GET'
     );
 
-    app.api('/api/version', async () => service.getVersion(), 'GET');
+    app.api(
+      '/api/version',
+      async (data) => {
+        const convId = typeof data?.convId === 'string' && data.convId.trim() ? data.convId.trim() : 'auto';
+        return service.getVersion(convId);
+      },
+      'GET'
+    );
+
+    app.api(
+      '/api/session-context',
+      async (data) => {
+        const convId = typeof data?.convId === 'string' && data.convId.trim() ? data.convId.trim() : 'auto';
+        const forceTrajectories = data?.force === true || data?.force === '1';
+        return service.getSessionContext({ convId, forceTrajectories });
+      },
+      'GET'
+    );
 
     app.api(
       '/api/dashboard',
@@ -873,6 +986,7 @@ async function startRuntime() {
           .then((r) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: true, at: r.syncStatus.lastSyncAt }));
+            void service.observeQuota({ forceQuota: true, synced: r }).catch(() => {});
           })
           .catch(() => {
             res.writeHead(500);

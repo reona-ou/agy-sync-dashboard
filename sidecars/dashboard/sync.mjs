@@ -5,7 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectSyncCandidates, readJsonSafe, resolvePaths } from '../../compat/platform.mjs';
 import { LocalUsageCollector, toLocalDateKey } from './collector.mjs';
-import { SLOT_MS, WINDOW_5H_MS, WINDOW_7D_MS, classifyModelFamily } from './forecast.mjs';
+import {
+  SLOT_MS,
+  WINDOW_5H_MS,
+  WINDOW_7D_MS,
+  classifyModelFamily,
+  mergeCalibrationMaps,
+  normalizeStoredCycles,
+} from './forecast.mjs';
 import { WebDavSyncClient, normalizeWebDavConfig, redactWebDavConfig } from './webdav.mjs';
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
@@ -317,11 +324,34 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
   const devPeriodsMap = new WeakMap();
   const devModelPeriodsMap = new WeakMap();
   const bySlot = Object.create(null);
+  const byMinute = Object.create(null);
+  const fallbackBySlot = Object.create(null);
   const legacyByDate = Object.create(null);
+  const calMaps = [];
   const allRecent = [];
+
+  const mergeTimelineBuckets = (target, source) => {
+    for (const [key, famMap] of Object.entries(source || {})) {
+      if (!target[key]) target[key] = Object.create(null);
+      for (const [fam, bucket] of Object.entries(famMap || {})) {
+        if (!target[key][fam]) {
+          target[key][fam] = { totalTokens: 0, nonCacheTokens: 0, inputTokens: 0, cacheReadTokens: 0, generations: 0 };
+        }
+        const dst = target[key][fam];
+        dst.totalTokens += Number(bucket?.totalTokens || 0);
+        dst.nonCacheTokens += Number(bucket?.nonCacheTokens || 0);
+        dst.inputTokens += Number(bucket?.inputTokens || 0);
+        dst.cacheReadTokens += Number(bucket?.cacheReadTokens || 0);
+        dst.generations += Number(bucket?.generations || 0);
+      }
+    }
+  };
 
   for (const snap of valid) {
     const loc = snap.local;
+    if (snap.quotaCalibration && typeof snap.quotaCalibration === 'object') {
+      calMaps.push(snap.quotaCalibration);
+    }
     addBucket(mergedTotals, loc.totals);
     conversationCount += Number(loc.conversationCount || 0);
 
@@ -338,18 +368,13 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
     }
 
     if (loc.bySlot && typeof loc.bySlot === 'object' && Object.keys(loc.bySlot).length > 0) {
-      for (const [slotKey, famMap] of Object.entries(loc.bySlot)) {
-        if (!bySlot[slotKey]) bySlot[slotKey] = Object.create(null);
-        for (const [fam, bucket] of Object.entries(famMap || {})) {
-          if (!bySlot[slotKey][fam]) {
-            bySlot[slotKey][fam] = { totalTokens: 0, nonCacheTokens: 0, generations: 0 };
-          }
-          const dst = bySlot[slotKey][fam];
-          dst.totalTokens += Number(bucket?.totalTokens || 0);
-          dst.nonCacheTokens += Number(bucket?.nonCacheTokens || 0);
-          dst.generations += Number(bucket?.generations || 0);
-        }
-      }
+      mergeTimelineBuckets(bySlot, loc.bySlot);
+    }
+
+    if (loc.byMinute && typeof loc.byMinute === 'object') {
+      mergeTimelineBuckets(byMinute, loc.byMinute);
+    } else if (loc.bySlot && typeof loc.bySlot === 'object' && Object.keys(loc.bySlot).length > 0) {
+      mergeTimelineBuckets(fallbackBySlot, loc.bySlot);
     } else if (loc.byDate) {
       const famTotals = Object.create(null);
       let famSum = 0;
@@ -365,15 +390,19 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
       for (const [dateKey, bucket] of Object.entries(loc.byDate || {})) {
         if (!legacyByDate[dateKey]) legacyByDate[dateKey] = Object.create(null);
         const tot = Number(bucket?.totalTokens || 0);
-        const nonCache = Number(bucket?.inputTokens || 0) + Number(bucket?.outputTokens || 0);
+        const inp = Number(bucket?.inputTokens || 0);
+        const cr = Number(bucket?.cacheReadTokens || 0);
+        const nonCache = inp + Number(bucket?.outputTokens || 0);
         const gens = Number(bucket?.generations || 0);
         for (const [fam, ratio] of shares) {
           if (!legacyByDate[dateKey][fam]) {
-            legacyByDate[dateKey][fam] = { totalTokens: 0, nonCacheTokens: 0, generations: 0 };
+            legacyByDate[dateKey][fam] = { totalTokens: 0, nonCacheTokens: 0, inputTokens: 0, cacheReadTokens: 0, generations: 0 };
           }
           const dst = legacyByDate[dateKey][fam];
           dst.totalTokens += Math.round(tot * ratio);
           dst.nonCacheTokens += Math.round(nonCache * ratio);
+          dst.inputTokens += Math.round(inp * ratio);
+          dst.cacheReadTokens += Math.round(cr * ratio);
           dst.generations += Math.round(gens * ratio);
         }
       }
@@ -498,6 +527,8 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
     .sort((a, b) => Number(b.lastModifiedMs || 0) - Number(a.lastModifiedMs || 0))
     .slice(0, 15);
 
+  const quotaCalibration = mergeCalibrationMaps(...calMaps);
+
   return {
     todayKey,
     deviceCount: devices.length,
@@ -510,7 +541,10 @@ export function mergeDeviceSnapshots(snapshots, currentDeviceId, nowMs = Date.no
     periods: finalMergedPeriods,
     byDate,
     bySlot,
+    byMinute,
+    fallbackBySlot,
     legacyByDate,
+    quotaCalibration,
     models,
     devices,
     recentConversations,
@@ -529,6 +563,7 @@ export class SyncManager {
     this.dataDir = options.dataDir || this.paths.pluginDataDir;
     this.configFile = path.join(this.dataDir, 'config.json');
     this.deviceFile = path.join(this.dataDir, 'device.json');
+    this.calibrationFile = path.join(this.dataDir, 'quota-calibration.json');
     this.lastMerged = null;
     this.lastSyncAt = 0;
     this.lastSyncStatus = { ok: false, mode: 'local-only', error: null, conflictFiles: [] };
@@ -762,9 +797,29 @@ export class SyncManager {
     return { peerSnapshots, conflictFiles };
   }
 
+  readLocalCalibration() {
+    const raw = readJsonSafe(this.calibrationFile, null);
+    if (!raw || typeof raw !== 'object') return null;
+    const out = {};
+    for (const [key, entry] of Object.entries(raw)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const cycles = normalizeStoredCycles(entry.cycles);
+      const cap = Number(entry.capacityTokens || 0);
+      const upd = Number(entry.updatedAt || 0);
+      if (cycles.length === 0 && !(cap > 0)) continue;
+      out[key] = {
+        ...(cap > 0 ? { capacityTokens: cap } : {}),
+        ...(upd > 0 ? { updatedAt: upd } : {}),
+        ...(cycles.length > 0 ? { cycles } : {}),
+      };
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+
   async syncOnce() {
     const { device, config, candidates } = await this.ensureIdentityAndConfig();
     const localSnapshot = await this.collector.collect();
+    const localCal = this.readLocalCalibration();
 
     const mySnapshot = {
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -775,6 +830,7 @@ export class SyncManager {
       arch: device.arch || process.arch,
       updatedAt: Date.now(),
       local: localSnapshot,
+      ...(localCal ? { quotaCalibration: localCal } : {}),
     };
 
     const configuredMode = VALID_SYNC_MODES.includes(config.syncMode)
