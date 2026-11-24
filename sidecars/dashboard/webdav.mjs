@@ -1,5 +1,37 @@
+import crypto from 'node:crypto';
+
 export const DEFAULT_WEBDAV_REMOTE_PATH = '/agy-sync-dashboard';
 const REQUEST_TIMEOUT_MS = 12_000;
+const DEFAULT_UPLOAD_KEEPALIVE_MS = 15 * 60_000;
+
+export function isRateLimitedStatus(status) {
+  return status === 429 || status === 503;
+}
+
+export function parseRetryAfterMs(headers) {
+  const raw = headers && typeof headers.get === 'function' ? headers.get('retry-after') : null;
+  if (!raw) return null;
+  const trimmed = String(raw).trim();
+  if (/^\d+$/.test(trimmed)) {
+    const secs = Number(trimmed);
+    return Number.isFinite(secs) && secs >= 0 ? Math.min(600_000, secs * 1000) : null;
+  }
+  const dateMs = Date.parse(trimmed);
+  if (Number.isFinite(dateMs)) {
+    return Math.max(0, Math.min(600_000, dateMs - Date.now()));
+  }
+  return null;
+}
+
+export function computeSnapshotContentHash(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return '';
+  const stable = {
+    ...snapshot,
+    updatedAt: 0,
+    local: snapshot.local && typeof snapshot.local === 'object' ? { ...snapshot.local, collectedAt: 0 } : snapshot.local,
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(stable)).digest('hex');
+}
 
 /**
  * Decode common XML entities returned inside WebDAV PROPFIND responses.
@@ -145,6 +177,7 @@ export class WebDavSyncClient {
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     this.ensuredKey = null;
     this.peerCache = new Map();
+    this.lastUploadByTarget = new Map();
   }
 
   buildAuthHeader(cfg) {
@@ -175,7 +208,20 @@ export class WebDavSyncClient {
     if (status === 401 || status === 403) {
       return `WebDAV ${stage} rejected (HTTP ${status}): check username/app password or permissions`;
     }
+    if (isRateLimitedStatus(status)) {
+      return `WebDAV ${stage} rate-limited (HTTP ${status})`;
+    }
     return `WebDAV ${stage} failed (HTTP ${status})`;
+  }
+
+  createHttpError(res, stage) {
+    const err = new Error(this.formatHttpError(res.status, stage));
+    err.status = res.status;
+    if (isRateLimitedStatus(res.status)) {
+      err.isRateLimit = true;
+      err.retryAfterMs = parseRetryAfterMs(res.headers);
+    }
+    return err;
   }
 
   async ensureDevicesDir(rawConfig, force = false) {
@@ -201,8 +247,8 @@ export class WebDavSyncClient {
       this.ensuredKey = cacheKey;
       return urls;
     }
-    if (probe.status === 401 || probe.status === 403) {
-      throw new Error(this.formatHttpError(probe.status, 'auth'));
+    if (probe.status === 401 || probe.status === 403 || isRateLimitedStatus(probe.status) || probe.status >= 500) {
+      throw this.createHttpError(probe, probe.status === 401 || probe.status === 403 ? 'auth' : 'PROPFIND');
     }
 
     for (const segUrl of urls.segmentUrls) {
@@ -210,8 +256,8 @@ export class WebDavSyncClient {
       if (res.status === 201 || res.status === 200 || res.status === 204 || res.status === 405 || res.status === 301) {
         continue;
       }
-      if (res.status === 401 || res.status === 403) {
-        throw new Error(this.formatHttpError(res.status, 'MKCOL'));
+      if (res.status === 401 || res.status === 403 || isRateLimitedStatus(res.status) || res.status >= 500) {
+        throw this.createHttpError(res, 'MKCOL');
       }
       // Some servers return 403/409/500 on existing collections; confirm with PROPFIND Depth 0.
       const check = await this.send(
@@ -223,8 +269,11 @@ export class WebDavSyncClient {
         },
         urls.cfg
       );
+      if (isRateLimitedStatus(check.status) || check.status >= 500) {
+        throw this.createHttpError(check, 'PROPFIND');
+      }
       if (check.status !== 207 && check.status !== 200) {
-        throw new Error(this.formatHttpError(res.status, 'MKCOL'));
+        throw this.createHttpError(res, 'MKCOL');
       }
     }
 
@@ -248,7 +297,7 @@ export class WebDavSyncClient {
     );
 
     if (res.status !== 207 && res.status !== 200) {
-      throw new Error(this.formatHttpError(res.status, 'PROPFIND'));
+      throw this.createHttpError(res, 'PROPFIND');
     }
 
     const xml = await res.text();
@@ -258,9 +307,24 @@ export class WebDavSyncClient {
     return { urls, files, conflictFiles };
   }
 
-  async uploadSnapshot(rawConfig, snapshot) {
+  async uploadSnapshot(rawConfig, snapshot, options = {}) {
     const urls = await this.ensureDevicesDir(rawConfig);
     const targetUrl = urls.snapshotUrl(snapshot.deviceId);
+    const contentHash = computeSnapshotContentHash(snapshot);
+    const prev = this.lastUploadByTarget.get(targetUrl);
+    const lastHash = options.lastUploadHash || prev?.hash || '';
+    const lastUploadedAt = Number(options.lastUploadAt || prev?.uploadedAt || 0);
+    const keepaliveMs = Number(options.keepaliveMs || DEFAULT_UPLOAD_KEEPALIVE_MS);
+    if (
+      !options.forceUpload &&
+      contentHash &&
+      lastHash === contentHash &&
+      lastUploadedAt > 0 &&
+      Date.now() - lastUploadedAt < keepaliveMs
+    ) {
+      return { url: targetUrl, hash: contentHash, skipped: true };
+    }
+
     const payload = JSON.stringify(snapshot, null, 2) + '\n';
 
     let res = await this.send(
@@ -288,10 +352,11 @@ export class WebDavSyncClient {
     }
 
     if (!res.ok && res.status !== 201 && res.status !== 204) {
-      throw new Error(this.formatHttpError(res.status, 'PUT'));
+      throw this.createHttpError(res, 'PUT');
     }
 
-    return targetUrl;
+    this.lastUploadByTarget.set(targetUrl, { hash: contentHash, uploadedAt: Date.now() });
+    return { url: targetUrl, hash: contentHash, skipped: false };
   }
 
   async fetchPeerSnapshots(rawConfig, currentDeviceId) {

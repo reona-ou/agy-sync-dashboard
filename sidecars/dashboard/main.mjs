@@ -149,10 +149,10 @@ export async function createDashboardService(options = {}) {
     }
   };
 
-  const runSync = () => {
+  const runSync = (syncOpts = { forceWebDav: false }) => {
     if (!inFlightSync) {
       inFlightSync = syncManager
-        .syncOnce()
+        .syncOnce({ forceWebDav: Boolean(syncOpts?.forceWebDav), ignoreWebDavCooldown: Boolean(syncOpts?.ignoreWebDavCooldown) })
         .then((res) => {
           updateFingerprint(res);
           return res;
@@ -452,9 +452,11 @@ export async function createDashboardService(options = {}) {
     };
   }
 
-  async function getDashboard({ forceSync = false, forceQuota = false, convId = 'auto' } = {}) {
-    const stale = !syncManager.lastMerged || Date.now() - syncManager.lastSyncAt > 4_000;
-    const synced = forceSync || stale ? await runSync() : syncManager.lastMerged;
+  async function getDashboard({ forceSync = false, forceQuota = false, forceWebDav = false, convId = 'auto' } = {}) {
+    const configuredIntervalMs = Number(syncManager.lastMerged?.settings?.syncIntervalMs || 30_000);
+    const staleMs = Math.max(15_000, configuredIntervalMs);
+    const stale = !syncManager.lastMerged || Date.now() - syncManager.lastSyncAt > staleMs;
+    const synced = forceSync || stale ? await runSync({ forceWebDav: Boolean(forceWebDav) }) : syncManager.lastMerged;
     const [rawQuota, hostTheme, sessionContext] = await Promise.all([
       quotaClient.fetch(forceQuota).catch((err) => ({
         connected: false,
@@ -638,7 +640,7 @@ export function createStandaloneHttpServer(service, options = {}) {
           service.recordActiveSession?.(parsed);
         }
         const convId = parsed?.convId || url.searchParams.get('convId') || 'auto';
-        sendJson(200, await service.getDashboard({ forceSync: true, forceQuota: true, convId }));
+        sendJson(200, await service.getDashboard({ forceSync: true, forceQuota: true, forceWebDav: true, convId }));
         return;
       }
 
@@ -927,7 +929,7 @@ async function startRuntime() {
       '/api/sync',
       async (data) => {
         const convId = typeof data?.convId === 'string' && data.convId.trim() ? data.convId.trim() : 'auto';
-        return service.getDashboard({ forceSync: true, forceQuota: true, convId });
+        return service.getDashboard({ forceSync: true, forceQuota: true, forceWebDav: true, convId });
       },
       'POST'
     );

@@ -20,6 +20,8 @@ export const USAGE_PERIODS = ['5h', 'today', '7d', 'all'];
 export const VALID_SYNC_MODES = ['folder', 'webdav', 'both', 'local-only'];
 export const SUPPORTED_LANGUAGES = ['zh-CN', 'en', 'ja'];
 const DEFAULT_SYNC_INTERVAL_MS = 30_000;
+const DEFAULT_MIN_WEBDAV_INTERVAL_MS = 60_000;
+const MAX_WEBDAV_COOLDOWN_MS = 600_000;
 
 export function normalizeLanguage(lang) {
   return SUPPORTED_LANGUAGES.includes(lang) ? lang : 'zh-CN';
@@ -564,9 +566,74 @@ export class SyncManager {
     this.configFile = path.join(this.dataDir, 'config.json');
     this.deviceFile = path.join(this.dataDir, 'device.json');
     this.calibrationFile = path.join(this.dataDir, 'quota-calibration.json');
+    this.webdavStateFile = path.join(this.dataDir, 'webdav-state.json');
+    this.webdavCacheFile = path.join(this.dataDir, 'webdav-peers-cache.json');
+    this.minWebDavIntervalMs = Math.max(0, Number(options.minWebDavIntervalMs ?? DEFAULT_MIN_WEBDAV_INTERVAL_MS));
     this.lastMerged = null;
     this.lastSyncAt = 0;
     this.lastSyncStatus = { ok: false, mode: 'local-only', error: null, conflictFiles: [] };
+  }
+
+  getWebDavTargetKey(webdavCfg) {
+    const norm = normalizeWebDavConfig(webdavCfg || {});
+    return `${norm.url}|${norm.remotePath}|${norm.username}`;
+  }
+
+  readWebDavState(targetKey) {
+    const raw = readJsonSafe(this.webdavStateFile, null);
+    if (!raw || typeof raw !== 'object' || raw.targetKey !== targetKey) {
+      return {
+        targetKey,
+        lastSyncAt: 0,
+        lastUploadAt: 0,
+        lastUploadHash: '',
+        cooldownUntil: 0,
+        consecutiveRateLimits: 0,
+        lastError: '',
+      };
+    }
+    return {
+      targetKey,
+      lastSyncAt: Number(raw.lastSyncAt || 0),
+      lastUploadAt: Number(raw.lastUploadAt || 0),
+      lastUploadHash: typeof raw.lastUploadHash === 'string' ? raw.lastUploadHash : '',
+      cooldownUntil: Number(raw.cooldownUntil || 0),
+      consecutiveRateLimits: Number(raw.consecutiveRateLimits || 0),
+      lastError: typeof raw.lastError === 'string' ? raw.lastError : '',
+    };
+  }
+
+  async writeWebDavState(state) {
+    try {
+      await fsp.mkdir(this.dataDir, { recursive: true });
+      await fsp.writeFile(this.webdavStateFile, JSON.stringify(state, null, 2) + '\n', 'utf8');
+    } catch {
+      // ignore non-critical state write error
+    }
+  }
+
+  readWebDavPeerCache(targetKey) {
+    const raw = readJsonSafe(this.webdavCacheFile, null);
+    if (!raw || typeof raw !== 'object' || raw.targetKey !== targetKey) {
+      return { peerSnapshots: [], conflictFiles: [] };
+    }
+    return {
+      peerSnapshots: Array.isArray(raw.peerSnapshots) ? raw.peerSnapshots : [],
+      conflictFiles: Array.isArray(raw.conflictFiles) ? raw.conflictFiles : [],
+    };
+  }
+
+  async writeWebDavPeerCache(targetKey, peerSnapshots, conflictFiles) {
+    try {
+      await fsp.mkdir(this.dataDir, { recursive: true });
+      await fsp.writeFile(
+        this.webdavCacheFile,
+        JSON.stringify({ targetKey, updatedAt: Date.now(), peerSnapshots, conflictFiles }, null, 2) + '\n',
+        'utf8'
+      );
+    } catch {
+      // ignore non-critical cache write error
+    }
   }
 
   mergeConfigDraft(baseConfig, patch = {}) {
@@ -694,7 +761,7 @@ export class SyncManager {
     nextConfig.updatedAt = Date.now();
     await writeConfigJsonSecure(this.configFile, nextConfig);
 
-    const synced = await this.syncOnce();
+    const synced = await this.syncOnce({ forceWebDav: true, ignoreWebDavCooldown: true });
     return {
       settings: sanitizeSettingsForClient(nextConfig),
       candidates,
@@ -816,10 +883,12 @@ export class SyncManager {
     return Object.keys(out).length > 0 ? out : null;
   }
 
-  async syncOnce() {
+  async syncOnce(options = {}) {
     const { device, config, candidates } = await this.ensureIdentityAndConfig();
     const localSnapshot = await this.collector.collect();
     const localCal = this.readLocalCalibration();
+    const forceWebDav = options.forceWebDav !== undefined ? Boolean(options.forceWebDav) : true;
+    const ignoreWebDavCooldown = Boolean(options.ignoreWebDavCooldown);
 
     const mySnapshot = {
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -871,14 +940,76 @@ export class SyncManager {
     }
 
     if (useWebDav) {
-      try {
-        remoteSnapshotUrl = await this.webdavClient.uploadSnapshot(config.webdav, mySnapshot);
-        const res = await this.webdavClient.fetchPeerSnapshots(config.webdav, mySnapshot.deviceId);
-        res.peerSnapshots.forEach(addPeer);
-        conflictFiles.push(...res.conflictFiles);
+      const targetKey = this.getWebDavTargetKey(config.webdav);
+      const davState = this.readWebDavState(targetKey);
+      const nowMs = Date.now();
+      const minInterval = Math.max(this.minWebDavIntervalMs, Number(config.syncIntervalMs || DEFAULT_SYNC_INTERVAL_MS));
+      const inCooldown = !ignoreWebDavCooldown && davState.cooldownUntil > nowMs;
+      const throttled = !forceWebDav && !inCooldown && davState.lastSyncAt > 0 && nowMs - davState.lastSyncAt < minInterval;
+
+      if (inCooldown) {
+        const cached = this.readWebDavPeerCache(targetKey);
+        cached.peerSnapshots.forEach(addPeer);
+        conflictFiles.push(...cached.conflictFiles);
+        const remainSec = Math.max(1, Math.ceil((davState.cooldownUntil - nowMs) / 1000));
+        errors.push(`WebDAV: ${davState.lastError || 'rate-limited'} (cooldown ${remainSec}s)`);
+      } else if (throttled) {
+        const cached = this.readWebDavPeerCache(targetKey);
+        cached.peerSnapshots.forEach(addPeer);
+        conflictFiles.push(...cached.conflictFiles);
         webdavOk = true;
-      } catch (err) {
-        errors.push(`WebDAV: ${err?.message || String(err)}`);
+      } else {
+        try {
+          const uploadRes = await this.webdavClient.uploadSnapshot(config.webdav, mySnapshot, {
+            lastUploadHash: davState.lastUploadHash,
+            lastUploadAt: davState.lastUploadAt,
+            forceUpload: false,
+          });
+          remoteSnapshotUrl = typeof uploadRes === 'string' ? uploadRes : uploadRes?.url || null;
+          const res = await this.webdavClient.fetchPeerSnapshots(config.webdav, mySnapshot.deviceId);
+          res.peerSnapshots.forEach(addPeer);
+          conflictFiles.push(...res.conflictFiles);
+          webdavOk = true;
+
+          await this.writeWebDavPeerCache(targetKey, res.peerSnapshots, res.conflictFiles);
+          await this.writeWebDavState({
+            targetKey,
+            lastSyncAt: Date.now(),
+            lastUploadAt: uploadRes && !uploadRes.skipped ? Date.now() : davState.lastUploadAt,
+            lastUploadHash: uploadRes?.hash || davState.lastUploadHash,
+            cooldownUntil: 0,
+            consecutiveRateLimits: 0,
+            lastError: '',
+          });
+        } catch (err) {
+          const cached = this.readWebDavPeerCache(targetKey);
+          cached.peerSnapshots.forEach(addPeer);
+          conflictFiles.push(...cached.conflictFiles);
+
+          const msg = err?.message || String(err);
+          if (err?.isRateLimit) {
+            const nextCount = (davState.consecutiveRateLimits || 0) + 1;
+            const backoffMs =
+              err.retryAfterMs && err.retryAfterMs > 0
+                ? err.retryAfterMs
+                : Math.min(MAX_WEBDAV_COOLDOWN_MS, 60_000 * 2 ** Math.min(nextCount - 1, 3));
+            await this.writeWebDavState({
+              ...davState,
+              targetKey,
+              cooldownUntil: Date.now() + backoffMs,
+              consecutiveRateLimits: nextCount,
+              lastError: msg,
+            });
+            errors.push(`WebDAV: ${msg} (cooldown ${Math.ceil(backoffMs / 1000)}s)`);
+          } else {
+            await this.writeWebDavState({
+              ...davState,
+              targetKey,
+              lastError: msg,
+            });
+            errors.push(`WebDAV: ${msg}`);
+          }
+        }
       }
     }
 

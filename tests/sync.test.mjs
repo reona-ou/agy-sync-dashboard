@@ -1785,3 +1785,103 @@ test('buildQuotaForecasts and computeCacheHitRate track cycle cache hit rates', 
   assert.equal(fc.currCacheHitRate, 0.7895);
   assert.equal(fc.prevCacheHitRate, 0.5714);
 });
+
+test('WebDAV rate limit (503) avoids MKCOL amplification, applies cooldown, and throttles unchanged/frequent syncs', async () => {
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-dav-limit-'));
+  const methodCounts = { PROPFIND: 0, MKCOL: 0, PUT: 0, GET: 0 };
+  let inject503 = false;
+  let tokensNow = 1000;
+  const now = Date.now();
+  const today = toLocalDateKey(now);
+
+  const davServer = http.createServer(async (req, res) => {
+    methodCounts[req.method] = (methodCounts[req.method] || 0) + 1;
+    if (inject503) {
+      res.writeHead(503, { 'Retry-After': '120', 'Content-Type': 'application/xml' });
+      res.end('<error>BlockedTemporarily</error>');
+      return;
+    }
+    const p = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    if (req.method === 'PROPFIND') {
+      const normalized = p.endsWith('/') ? p : `${p}/`;
+      const xml = `<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>${normalized}</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response></D:multistatus>`;
+      res.writeHead(207, { 'Content-Type': 'application/xml; charset=utf-8' });
+      res.end(xml);
+      return;
+    }
+    if (req.method === 'PUT') {
+      for await (const chunk of req) void chunk;
+      res.writeHead(201);
+      res.end();
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((r) => davServer.listen(0, '127.0.0.1', r));
+  try {
+    const davPort = davServer.address().port;
+    const dataDir = path.join(tmpRoot, 'data');
+    const fakeCollector = {
+      async collect() {
+        return {
+          collectedAt: Date.now(),
+          conversationCount: 1,
+          totals: { inputTokens: tokensNow, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: tokensNow, generations: 1, cacheHitRate: 0 },
+          latestGeneration: null,
+          byDate: { [today]: { inputTokens: tokensNow, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, thinkingTokens: 0, totalTokens: tokensNow, generations: 1 } },
+          byModel: {},
+          recentConversations: [],
+        };
+      },
+    };
+
+    const manager = new SyncManager({
+      paths: { pluginDataDir: dataDir, conversationsDir: path.join(tmpRoot, 'c'), summariesDb: path.join(tmpRoot, 's.db') },
+      collector: fakeCollector,
+      dataDir,
+      minWebDavIntervalMs: 60_000,
+    });
+
+    await manager.updateSettings({
+      syncMode: 'webdav',
+      webdav: { url: `http://127.0.0.1:${davPort}/dav`, remotePath: '/agy-sync-dashboard', username: 'u', password: 'p' },
+    });
+    assert.equal(methodCounts.PUT, 1);
+
+    // 1. Background sync (forceWebDav: false) within 60s must throttle without hitting WebDAV
+    const propfindBeforeThrottle = methodCounts.PROPFIND;
+    const throttledRes = await manager.syncOnce({ forceWebDav: false });
+    assert.equal(throttledRes.syncStatus.ok, true);
+    assert.equal(methodCounts.PROPFIND, propfindBeforeThrottle);
+    assert.equal(methodCounts.PUT, 1);
+
+    // 2. Explicit forceWebDav with unchanged tokens skips redundant PUT
+    await manager.syncOnce({ forceWebDav: true });
+    assert.equal(methodCounts.PUT, 1);
+
+    // 3. Explicit forceWebDav with changed tokens uploads PUT
+    tokensNow = 2000;
+    await manager.syncOnce({ forceWebDav: true });
+    assert.equal(methodCounts.PUT, 2);
+
+    // 4. Server returns 503 on PROPFIND: must NOT fall through to MKCOL, must enter cooldown
+    inject503 = true;
+    manager.webdavClient.ensuredKey = null;
+    const errRes = await manager.syncOnce({ forceWebDav: true });
+    assert.equal(errRes.syncStatus.ok, false);
+    assert.match(errRes.syncStatus.error, /503/);
+    assert.match(errRes.syncStatus.error, /cooldown/);
+    assert.equal(methodCounts.MKCOL, 0);
+
+    // 5. Subsequent sync during active cooldown skips network calls completely
+    const hitsDuringBan = methodCounts.PROPFIND;
+    const cooledRes = await manager.syncOnce({ forceWebDav: true });
+    assert.equal(cooledRes.syncStatus.ok, false);
+    assert.equal(methodCounts.PROPFIND, hitsDuringBan);
+  } finally {
+    await new Promise((r) => davServer.close(r));
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});

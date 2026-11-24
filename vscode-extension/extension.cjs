@@ -364,7 +364,7 @@ async function activate(context) {
     if (inFlightStatus) return;
     inFlightStatus = true;
     try {
-      const q = forceQuota ? '?force=1&quotaRefresh=1' : '';
+      const q = forceQuota ? '?quotaRefresh=1' : '';
       const res = await backend.handleApi(`/api/dashboard${q}`, 'GET', '');
       if (res.ok && res.bodyText) {
         const data = JSON.parse(res.bodyText);

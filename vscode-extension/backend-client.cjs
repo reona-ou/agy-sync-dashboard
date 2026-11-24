@@ -220,7 +220,7 @@ async function createInProcessClient(runtimeRoot) {
       }
       if (pathname === '/api/sync' && upperMethod === 'POST') {
         const convId = bodyObj?.convId || parsedUrl.searchParams.get('convId') || 'auto';
-        return jsonRes(200, await service.getDashboard({ forceSync: true, forceQuota: true, convId }));
+        return jsonRes(200, await service.getDashboard({ forceSync: true, forceQuota: true, forceWebDav: true, convId }));
       }
       if (pathname === '/api/settings' && upperMethod === 'GET') {
         return jsonRes(200, await service.getSettings());
