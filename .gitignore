@@ -7,3 +7,7 @@ Thumbs.db
 data/
 .scratch/
 devices/
+vscode-extension/runtime/
+vscode-extension/dist/
+vscode-extension/assets/icon.png
+vscode-extension/LICENSE

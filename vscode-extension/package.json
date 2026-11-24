@@ -1,0 +1,105 @@
+{
+  "name": "agy-sync-dashboard",
+  "displayName": "AGY Sync Dashboard",
+  "description": "Multi-device Antigravity token usage dashboard, live quota forecast, session context monitor, and status bar capsule.",
+  "version": "1.5.0",
+  "publisher": "reona-ou",
+  "license": "MIT",
+  "icon": "assets/icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "antigravity",
+    "ai",
+    "token",
+    "quota",
+    "dashboard",
+    "sync"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.cjs",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agy-sync-dashboard",
+          "title": "AGY Sync Dashboard",
+          "icon": "assets/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agy-sync-dashboard": [
+        {
+          "type": "webview",
+          "id": "agySyncDashboard.sidebarView",
+          "name": "Dashboard"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "agySyncDashboard.openDashboard",
+        "title": "AGY Sync Dashboard: Focus Dashboard",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "agySyncDashboard.openPanel",
+        "title": "AGY Sync Dashboard: Open in Editor Tab",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "agySyncDashboard.syncNow",
+        "title": "AGY Sync Dashboard: Sync Now",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "agySyncDashboard.toggleStatusBar",
+        "title": "AGY Sync Dashboard: Toggle Status Bar Capsule"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "agySyncDashboard.syncNow",
+          "when": "view == agySyncDashboard.sidebarView",
+          "group": "navigation"
+        },
+        {
+          "command": "agySyncDashboard.openPanel",
+          "when": "view == agySyncDashboard.sidebarView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AGY Sync Dashboard",
+      "properties": {
+        "agySyncDashboard.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show live context, multi-model quota, cache hit rate, and speed capsule in the bottom status bar."
+        },
+        "agySyncDashboard.statusBar.refreshSeconds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 3,
+          "maximum": 300,
+          "description": "Refresh interval (in seconds) for the status bar capsule."
+        },
+        "agySyncDashboard.nodePath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to a Node.js >= 22.5 (or agy-node) executable used if the IDE extension host lacks node:sqlite."
+        }
+      }
+    }
+  }
+}
