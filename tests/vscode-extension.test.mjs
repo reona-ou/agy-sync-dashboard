@@ -163,6 +163,7 @@ test('vscode-extension buildVsix packages a valid VSIX archive with runtime and 
   assert.ok(latin.includes('extension.vsixmanifest'));
   assert.ok(latin.includes('extension/package.json'));
   assert.ok(latin.includes('extension/extension.cjs'));
+  assert.ok(latin.includes('extension/LICENSE.txt'));
   assert.ok(latin.includes('extension/runtime/sidecars/dashboard/main.mjs'));
   assert.ok(latin.includes('extension/assets/icon.png'));
 });

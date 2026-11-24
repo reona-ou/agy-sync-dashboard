@@ -254,6 +254,29 @@ function buildVsixManifest(pkg) {
   const version = escapeXml(pkg.version);
   const displayName = escapeXml(pkg.displayName);
   const description = escapeXml(pkg.description);
+  const repoUrl = typeof pkg.repository === 'string' ? pkg.repository : (pkg.repository?.url || '');
+  const bugsUrl = typeof pkg.bugs === 'string' ? pkg.bugs : (pkg.bugs?.url || '');
+  const homepageUrl = pkg.homepage || '';
+  const extraProps = [];
+  if (repoUrl) {
+    extraProps.push(
+      `      <Property Id="Microsoft.VisualStudio.Services.Links.Source" Value="${escapeXml(repoUrl)}" />`,
+      `      <Property Id="Microsoft.VisualStudio.Services.Links.Getstarted" Value="${escapeXml(repoUrl)}" />`,
+      `      <Property Id="Microsoft.VisualStudio.Services.Links.GitHub" Value="${escapeXml(repoUrl)}" />`,
+    );
+  }
+  if (bugsUrl) {
+    extraProps.push(`      <Property Id="Microsoft.VisualStudio.Services.Links.Support" Value="${escapeXml(bugsUrl)}" />`);
+  }
+  if (homepageUrl) {
+    extraProps.push(`      <Property Id="Microsoft.VisualStudio.Services.Links.Learn" Value="${escapeXml(homepageUrl)}" />`);
+  }
+  if (pkg.galleryBanner?.color) {
+    extraProps.push(`      <Property Id="Microsoft.VisualStudio.Services.Branding.Color" Value="${escapeXml(pkg.galleryBanner.color)}" />`);
+  }
+  if (pkg.galleryBanner?.theme) {
+    extraProps.push(`      <Property Id="Microsoft.VisualStudio.Services.Branding.Theme" Value="${escapeXml(pkg.galleryBanner.theme)}" />`);
+  }
   return `<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
@@ -262,13 +285,21 @@ function buildVsixManifest(pkg) {
     <Description xml:space="preserve">${description}</Description>
     <Tags>${escapeXml((pkg.keywords || []).join(','))}</Tags>
     <Categories>${escapeXml((pkg.categories || []).join(','))}</Categories>
+    <GalleryFlags>Public</GalleryFlags>
     <Icon>extension/assets/icon.png</Icon>
-    <License>extension/LICENSE</License>
+    <License>extension/LICENSE.txt</License>
     <Properties>
       <Property Id="Microsoft.VisualStudio.Code.Engine" Value="${escapeXml(pkg.engines?.vscode || '^1.85.0')}" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionDependencies" Value="" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionPack" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="workspace" />
       <Property Id="Microsoft.VisualStudio.Code.LocalizedLanguages" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.EnabledApiProposals" Value="" />
+      <Property Id="Microsoft.VisualStudio.Code.ExecutesCode" Value="true" />
+${extraProps.join('\n')}
+      <Property Id="Microsoft.VisualStudio.Services.GitHubFlavoredMarkdown" Value="true" />
+      <Property Id="Microsoft.VisualStudio.Services.Content.Pricing" Value="Free" />
+      <Property Id="Microsoft.VisualStudio.Services.EnableMarketplaceQnA" Value="${pkg.qna === false ? 'false' : 'true'}" />
     </Properties>
   </Metadata>
   <Installation>
@@ -278,7 +309,7 @@ function buildVsixManifest(pkg) {
   <Assets>
     <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
     <Asset Type="Microsoft.VisualStudio.Services.Content.Details" Path="extension/README.md" Addressable="true" />
-    <Asset Type="Microsoft.VisualStudio.Services.Content.License" Path="extension/LICENSE" Addressable="true" />
+    <Asset Type="Microsoft.VisualStudio.Services.Content.License" Path="extension/LICENSE.txt" Addressable="true" />
     <Asset Type="Microsoft.VisualStudio.Services.Icons.Default" Path="extension/assets/icon.png" Addressable="true" />
   </Assets>
 </PackageManifest>
@@ -312,9 +343,10 @@ export async function buildVsix() {
   await fsp.mkdir(path.dirname(iconPath), { recursive: true });
   await fsp.writeFile(iconPath, generateExtensionIconPng(128));
 
+  await fsp.rm(path.join(EXT_DIR, 'LICENSE'), { force: true });
   const licenseSrc = path.join(REPO_ROOT, 'LICENSE');
   if (fs.existsSync(licenseSrc)) {
-    await fsp.copyFile(licenseSrc, path.join(EXT_DIR, 'LICENSE'));
+    await fsp.copyFile(licenseSrc, path.join(EXT_DIR, 'LICENSE.txt'));
   }
 
   const pkg = JSON.parse(await fsp.readFile(path.join(EXT_DIR, 'package.json'), 'utf8'));
