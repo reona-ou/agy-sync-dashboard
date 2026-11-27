@@ -144,8 +144,11 @@
       diagRemoteDir: 'WebDAV 目录',
       diagSnapshot: '本机快照',
       diagLastSync: '最近同步',
+      diagVersion: '当前版本',
       diagSyncError: '同步错误',
-      ctxTitle: '当前对话',
+      ctxTitle: '活动对话',
+      ctxActiveCount: (n) => `${n} 个活动`,
+      ctxRunningCount: (n) => `${n} 个运行中`,
       ctxRemainLabel: '剩余',
       ctxEstLabel: (v) => `预估 ${v}`,
       ctxSourceExact: 'API 实测',
@@ -153,8 +156,8 @@
       ctxRunning: '生成中',
       ctxLatestGen: '最近生成',
       ctxLabelShort: '上下文',
-      ctxActiveBadge: '当前',
-      ctxPending: '当前会话尚未产生模型调用，发送消息后将显示上下文占用。',
+      ctxActiveBadge: '活动',
+      ctxPending: '该会话尚未产生模型调用，发送消息后将显示上下文占用。',
       ctxEmpty: '暂未检测到本地对话记录。',
       cacheRateShort: (v) => `命中率 ${v}`,
       inTok: '输入',
@@ -307,8 +310,11 @@
       diagRemoteDir: 'WebDAV folder',
       diagSnapshot: 'Local snapshot',
       diagLastSync: 'Last sync',
+      diagVersion: 'Version',
       diagSyncError: 'Sync error',
-      ctxTitle: 'Current Session',
+      ctxTitle: 'Active Sessions',
+      ctxActiveCount: (n) => `${n} active`,
+      ctxRunningCount: (n) => `${n} running`,
       ctxRemainLabel: 'Left',
       ctxEstLabel: (v) => `Est. ${v}`,
       ctxSourceExact: 'Measured',
@@ -470,8 +476,11 @@
       diagRemoteDir: 'WebDAV フォルダ',
       diagSnapshot: 'ローカルスナップショット',
       diagLastSync: '最終同期',
+      diagVersion: 'バージョン',
       diagSyncError: '同期エラー',
-      ctxTitle: '現在の会話',
+      ctxTitle: 'アクティブな会話',
+      ctxActiveCount: (n) => `${n} 件稼働中`,
+      ctxRunningCount: (n) => `${n} 件実行中`,
       ctxRemainLabel: '残り',
       ctxEstLabel: (v) => `推定 ${v}`,
       ctxSourceExact: '実測値',
@@ -479,7 +488,7 @@
       ctxRunning: '生成中',
       ctxLatestGen: '最新生成',
       ctxLabelShort: 'コンテキスト',
-      ctxActiveBadge: '現在',
+      ctxActiveBadge: 'アクティブ',
       ctxPending: 'この会話ではまだモデル呼び出しがありません。メッセージ送信後に表示されます。',
       ctxEmpty: 'ローカルの会話履歴がまだ見つかりません。',
       cacheRateShort: (v) => `ヒット率 ${v}`,
@@ -858,64 +867,55 @@
     return 'ok';
   }
 
-  function buildContextCard(sessionContext, localLatestGen) {
+  function buildSessionTile(sess, fallbackGen, showModelTag, detectionSource) {
     const dict = t();
-    const card = el('article', { className: 'card' });
-    const current = sessionContext?.current || null;
+    const box = el('li', { className: `ctx-box${sess?.isRunning ? ' live' : ''}` });
 
-    const rightTagText =
-      current?.displayName || current?.modelId || localLatestGen?.displayName || '';
-    const headChildren = [el('h2', { className: 'card-title', text: dict.ctxTitle })];
-    if (rightTagText) {
-      headChildren.push(el('span', { className: 'tag accent', text: rightTagText, title: rightTagText }));
-    }
-    card.appendChild(el('div', { className: 'card-head' }, headChildren));
-
-    const genInfo = current?.latestGeneration || localLatestGen || null;
-    if (!current && !genInfo) {
-      card.appendChild(el('p', { className: 'empty-note', text: dict.ctxEmpty }));
-      return card;
-    }
-
-    const box = el('div', { className: 'ctx-box' });
-
-    if (current) {
-      const statusText = current.isRunning
+    if (sess) {
+      const statusText = sess.isRunning
         ? dict.ctxRunning
-        : current.source === 'estimate'
+        : sess.source === 'estimate'
           ? dict.ctxSourceEst
-          : current.source === 'usage'
+          : sess.source === 'usage'
             ? dict.ctxSourceExact
             : '';
-      const srcHint = sessionContext?.detectionSource ? ` (${sessionContext.detectionSource})` : '';
+      const srcHint = detectionSource ? ` (${detectionSource})` : '';
+      const modelText = showModelTag ? sess.displayName || sess.modelId || '' : '';
+      const badges = el('div', { className: 'ctx-badges' }, [
+        modelText
+          ? el('span', { className: 'tag accent ctx-model-tag', text: modelText, title: modelText })
+          : null,
+        statusText
+          ? el('span', {
+              className: `ctx-badge${sess.isRunning ? ' live' : ''}`,
+              text: statusText,
+            })
+          : null,
+      ]);
+
       box.appendChild(
         el('div', { className: 'ctx-conv-row' }, [
           el('span', {
             className: 'ctx-conv-name',
-            text: current.title || current.conversationId,
-            title: `${current.title || current.conversationId}${srcHint}`,
+            text: sess.title || sess.conversationId,
+            title: `${sess.title || sess.conversationId}${srcHint}`,
           }),
-          statusText
-            ? el('span', {
-                className: `ctx-badge${current.isRunning ? ' live' : ''}`,
-                text: statusText,
-              })
-            : null,
+          badges.childNodes.length ? badges : null,
         ])
       );
 
-      if (current.maxContextTokens > 0 || current.usedTokens > 0) {
-        const hasMax = current.maxContextTokens > 0;
-        const ratio = hasMax ? Math.max(0, Number(current.usageRatio || 0)) : 0;
+      if (sess.maxContextTokens > 0 || sess.usedTokens > 0) {
+        const hasMax = sess.maxContextTokens > 0;
+        const ratio = hasMax ? Math.max(0, Number(sess.usageRatio || 0)) : 0;
         const pctClamped = hasMax ? Math.min(100, Math.max(1, Math.round(ratio * 100))) : 0;
-        const usedMainText = `${fmtTokens(current.usedTokens)} / ${hasMax ? fmtTokens(current.maxContextTokens) : '--'}`;
+        const usedMainText = `${fmtTokens(sess.usedTokens)} / ${hasMax ? fmtTokens(sess.maxContextTokens) : '--'}`;
         const usedSubParts = [];
         if (hasMax) usedSubParts.push(fmtPct(ratio));
-        if (hasMax) usedSubParts.push(`${dict.ctxRemainLabel} ${fmtTokens(current.remainingTokens)}`);
+        if (hasMax) usedSubParts.push(`${dict.ctxRemainLabel} ${fmtTokens(sess.remainingTokens)}`);
 
         const exactTip = hasMax
-          ? `${Number(current.usedTokens || 0).toLocaleString()} / ${Number(current.maxContextTokens || 0).toLocaleString()} tokens`
-          : `${Number(current.usedTokens || 0).toLocaleString()} tokens`;
+          ? `${Number(sess.usedTokens || 0).toLocaleString()} / ${Number(sess.maxContextTokens || 0).toLocaleString()} tokens`
+          : `${Number(sess.usedTokens || 0).toLocaleString()} tokens`;
 
         box.appendChild(
           el('div', { className: 'ctx-numbers', title: exactTip }, [
@@ -924,38 +924,49 @@
           ])
         );
         box.appendChild(
-          el('div', { className: 'meter' }, [
-            el('div', {
-              className: `meter-fill ${hasMax ? contextLevelClass(ratio) : ''}`,
-              style: { width: `${pctClamped}%` },
-            }),
-          ])
+          el(
+            'div',
+            {
+              className: 'meter',
+              role: 'progressbar',
+              'aria-label': `${sess.title || sess.conversationId} ${dict.ctxLabelShort}`,
+              'aria-valuemin': '0',
+              'aria-valuemax': '100',
+              'aria-valuenow': String(hasMax ? Math.min(100, Math.round(ratio * 100)) : 0),
+            },
+            [
+              el('div', {
+                className: `meter-fill ${hasMax ? contextLevelClass(ratio) : ''}`,
+                style: { width: `${pctClamped}%` },
+              }),
+            ]
+          )
         );
 
         const metaItems = [];
-        if (current.promptTokens > 0) {
-          metaItems.push(el('span', { text: `${dict.inTok} ${fmtTokens(current.promptTokens)}` }));
+        if (sess.promptTokens > 0) {
+          metaItems.push(el('span', { text: `${dict.inTok} ${fmtTokens(sess.promptTokens)}` }));
         }
-        if (current.responseTokens > 0) {
-          metaItems.push(el('span', { text: `${dict.outTok} ${fmtTokens(current.responseTokens)}` }));
+        if (sess.responseTokens > 0) {
+          metaItems.push(el('span', { text: `${dict.outTok} ${fmtTokens(sess.responseTokens)}` }));
         }
         const hasSessionCache =
-          Number(current.sessionInputTokens || 0) + Number(current.sessionCacheReadTokens || 0) > 0;
-        const hasTurnCache = Number(current.inputTokens || 0) + Number(current.cacheReadTokens || 0) > 0;
+          Number(sess.sessionInputTokens || 0) + Number(sess.sessionCacheReadTokens || 0) > 0;
+        const hasTurnCache = Number(sess.inputTokens || 0) + Number(sess.cacheReadTokens || 0) > 0;
         if (hasSessionCache || hasTurnCache) {
           const sessionRate = hasSessionCache
-            ? typeof current.sessionCacheHitRate === 'number'
-              ? current.sessionCacheHitRate
-              : calcCacheRate(current.sessionInputTokens, current.sessionCacheReadTokens)
-            : typeof current.cacheHitRate === 'number'
-              ? current.cacheHitRate
-              : calcCacheRate(current.inputTokens, current.cacheReadTokens);
+            ? typeof sess.sessionCacheHitRate === 'number'
+              ? sess.sessionCacheHitRate
+              : calcCacheRate(sess.sessionInputTokens, sess.sessionCacheReadTokens)
+            : typeof sess.cacheHitRate === 'number'
+              ? sess.cacheHitRate
+              : calcCacheRate(sess.inputTokens, sess.cacheReadTokens);
           metaItems.push(el('span', { text: `${dict.cacheTok} ${fmtPct(sessionRate)}` }));
         }
-        if (current.estimatedTokensUsed > 0 && current.source === 'usage') {
-          metaItems.push(el('span', { text: dict.ctxEstLabel(fmtTokens(current.estimatedTokensUsed)) }));
+        if (sess.estimatedTokensUsed > 0 && sess.source === 'usage') {
+          metaItems.push(el('span', { text: dict.ctxEstLabel(fmtTokens(sess.estimatedTokensUsed)) }));
         }
-        const ts = current.lastUserViewMs || current.lastModifiedMs;
+        const ts = sess.lastUserViewMs || sess.lastModifiedMs;
         if (ts) {
           metaItems.push(el('span', { text: fmtRelative(ts) }));
         }
@@ -967,6 +978,7 @@
       }
     }
 
+    const genInfo = sess?.latestGeneration || fallbackGen || null;
     if (genInfo) {
       const genItems = [
         el('span', { className: 'ctx-gen-label', text: dict.ctxLatestGen }),
@@ -991,7 +1003,54 @@
       box.appendChild(el('div', { className: 'ctx-gen-foot' }, genItems));
     }
 
-    card.appendChild(box);
+    return box;
+  }
+
+  function buildContextCard(sessionContext, localLatestGen) {
+    const dict = t();
+    const card = el('article', { className: 'card' });
+    const current = sessionContext?.current || null;
+    const activeList =
+      Array.isArray(sessionContext?.activeConversations) && sessionContext.activeConversations.length
+        ? sessionContext.activeConversations
+        : current
+          ? [current]
+          : [];
+    const runningCount = activeList.filter((s) => s.isRunning).length;
+
+    let rightTagText = '';
+    if (activeList.length > 1) {
+      rightTagText = runningCount > 0 ? dict.ctxRunningCount(runningCount) : dict.ctxActiveCount(activeList.length);
+    } else if (activeList.length === 1) {
+      rightTagText =
+        activeList[0].displayName || activeList[0].modelId || localLatestGen?.displayName || '';
+    } else if (localLatestGen?.displayName) {
+      rightTagText = localLatestGen.displayName;
+    }
+
+    const headChildren = [el('h2', { className: 'card-title', text: dict.ctxTitle })];
+    if (rightTagText) {
+      headChildren.push(el('span', { className: 'tag accent', text: rightTagText, title: rightTagText }));
+    }
+    card.appendChild(el('div', { className: 'card-head' }, headChildren));
+
+    if (!activeList.length && !localLatestGen) {
+      card.appendChild(el('p', { className: 'empty-note', text: dict.ctxEmpty }));
+      return card;
+    }
+
+    const list = el('ul', { className: 'ctx-list', role: 'list' });
+    if (activeList.length) {
+      const showPerRowModel = activeList.length > 1;
+      activeList.forEach((sess, idx) => {
+        const fallbackGen = activeList.length === 1 && idx === 0 ? localLatestGen : null;
+        list.appendChild(buildSessionTile(sess, fallbackGen, showPerRowModel, sessionContext?.detectionSource));
+      });
+    } else if (localLatestGen) {
+      list.appendChild(buildSessionTile(null, localLatestGen, false, sessionContext?.detectionSource));
+    }
+
+    card.appendChild(list);
     return card;
   }
 
@@ -1307,7 +1366,14 @@
       const liveConvMap = new Map(
         (data.sessionContext?.conversations || []).map((item) => [item.conversationId, item])
       );
-      const activeConvId = data.sessionContext?.current?.conversationId || '';
+      const activeConvIds = new Set(
+        (data.sessionContext?.activeConversations || [])
+          .map((item) => item?.conversationId)
+          .filter(Boolean)
+      );
+      if (!activeConvIds.size && data.sessionContext?.current?.conversationId) {
+        activeConvIds.add(data.sessionContext.current.conversationId);
+      }
       const convCard = el('article', { className: 'card' });
       convCard.appendChild(
         el('div', { className: 'card-head' }, [
@@ -1320,7 +1386,7 @@
         const ctxUsed = Number(live?.usedTokens || c.contextUsedTokens || 0);
         const ctxMax = Number(live?.maxContextTokens || c.maxContextTokens || 0);
         const modelLabel = live?.displayName || c.displayName || c.modelId || '';
-        const isCurrent = activeConvId && c.conversationId === activeConvId;
+        const isCurrent = activeConvIds.has(c.conversationId);
         const isRunning = Boolean(live?.isRunning);
 
         const rowChildren = [
@@ -1858,6 +1924,15 @@
     const settings = data.settings || {};
 
     document.getElementById('settings-device-id').textContent = data.device?.deviceId || '--';
+    const verEl = document.getElementById('settings-version');
+    if (verEl) {
+      if (data.appVersion) {
+        verEl.hidden = false;
+        verEl.textContent = `v${data.appVersion}`;
+      } else {
+        verEl.hidden = true;
+      }
+    }
 
     const syncDirInput = document.getElementById('input-syncdir');
     const davUrlInput = document.getElementById('input-dav-url');
@@ -1914,6 +1989,12 @@
       diag.appendChild(el('div', { text: `${dict.diagSyncError}: ${data.syncStatus.error}` }));
     }
     diag.appendChild(el('div', { text: `${dict.diagLastSync}: ${fmtRelative(data.syncStatus?.lastSyncAt)}` }));
+    if (data.appVersion || data.nodeVersion) {
+      const verParts = [];
+      if (data.appVersion) verParts.push(`v${data.appVersion}`);
+      if (data.nodeVersion) verParts.push(`Node ${data.nodeVersion}`);
+      diag.appendChild(el('div', { text: `${dict.diagVersion}: ${verParts.join(' · ')}` }));
+    }
   }
 
   function scheduleFullRefreshTimer() {
@@ -1927,9 +2008,17 @@
     }, intervalMs);
   }
 
-  function contextSignature(cur) {
-    if (!cur || !cur.conversationId) return '';
-    return `${cur.conversationId}|${cur.usedTokens || 0}|${cur.maxContextTokens || 0}|${cur.isRunning ? 1 : 0}`;
+  function contextSignature(sessionContext) {
+    const list =
+      Array.isArray(sessionContext?.activeConversations) && sessionContext.activeConversations.length
+        ? sessionContext.activeConversations
+        : sessionContext?.current?.conversationId
+          ? [sessionContext.current]
+          : [];
+    if (!list.length) return '';
+    return list
+      .map((c) => `${c.conversationId}|${c.usedTokens || 0}|${c.maxContextTokens || 0}|${c.isRunning ? 1 : 0}`)
+      .join(';');
   }
 
   function renderAll(data, opts) {
@@ -1938,7 +2027,7 @@
     if (typeof data?.revision === 'number') {
       state.lastRevision = data.revision;
     }
-    state.lastContextSig = contextSignature(data?.sessionContext?.current);
+    state.lastContextSig = contextSignature(data?.sessionContext);
     const nextInterval = Math.max(3000, Number(data?.settings?.syncIntervalMs || 30000));
     if (nextInterval !== state.refreshIntervalMs || !state.fullRefreshTimer) {
       state.refreshIntervalMs = nextInterval;
@@ -2002,7 +2091,7 @@
             ...state.dashboard,
             sessionContext: payload.sessionContext,
           };
-          state.lastContextSig = contextSignature(payload.sessionContext.current);
+          state.lastContextSig = contextSignature(payload.sessionContext);
           renderOverview(state.dashboard);
         }
         if (typeof payload?.revision === 'number' && payload.revision !== state.lastRevision) {
@@ -2247,9 +2336,22 @@
         if (!res.ok) return;
         const ver = await res.json();
         const revChanged = typeof ver?.revision === 'number' && ver.revision !== state.lastRevision;
-        const verCtxSig = ver?.activeConvId
-          ? `${ver.activeConvId}|${ver.activeUsedTokens || 0}|${ver.activeMaxContextTokens || 0}|${ver.activeIsRunning ? 1 : 0}`
-          : '';
+        const verSessions =
+          Array.isArray(ver?.activeSessions) && ver.activeSessions.length
+            ? ver.activeSessions
+            : ver?.activeConvId
+              ? [
+                  {
+                    conversationId: ver.activeConvId,
+                    usedTokens: ver.activeUsedTokens || 0,
+                    maxContextTokens: ver.activeMaxContextTokens || 0,
+                    isRunning: Boolean(ver.activeIsRunning),
+                  },
+                ]
+              : [];
+        const verCtxSig = verSessions
+          .map((c) => `${c.conversationId}|${c.usedTokens || 0}|${c.maxContextTokens || 0}|${c.isRunning ? 1 : 0}`)
+          .join(';');
         const ctxChanged = Boolean(verCtxSig && verCtxSig !== state.lastContextSig);
         if (revChanged) {
           if (!state.inFlightLoad) {

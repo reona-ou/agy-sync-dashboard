@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Antigravity Sync Dashboard</title>
   <script src="preload.js"></script>
-  <link rel="stylesheet" href="theme.css?v=1.6.5">
-  <link rel="stylesheet" href="styles.css?v=1.6.5">
+  <link rel="stylesheet" href="theme.css?v=1.7.0">
+  <link rel="stylesheet" href="styles.css?v=1.7.0">
 </head>
 <body>
   <div class="shell">
@@ -58,7 +58,10 @@
           <article class="card settings-card">
           <div class="card-head">
             <h2 class="card-title" id="ui-settings-title">多设备同步配置</h2>
-            <span class="mono tag" id="settings-device-id">--</span>
+            <div class="card-head-tags">
+              <span class="mono tag accent" id="settings-version" hidden>--</span>
+              <span class="mono tag" id="settings-device-id">--</span>
+            </div>
           </div>
           <form id="settings-form" class="form-stack">
             <div class="field">
@@ -159,6 +162,6 @@
       </section>
     </main>
   </div>
-  <script src="app.js?v=1.6.5"></script>
+  <script src="app.js?v=1.7.0"></script>
 </body>
 </html>

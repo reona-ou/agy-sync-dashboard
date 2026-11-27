@@ -90,6 +90,16 @@ export async function pickNativeFolder(initialDir = '', lang = 'zh-CN') {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+function readDashboardVersion() {
+  for (const rel of ['../../plugin.json', '../../package.json', '../../../package.json']) {
+    const meta = readJsonSafe(path.resolve(HERE, rel), null);
+    if (meta?.version) return String(meta.version);
+  }
+  return '';
+}
+
+const DASHBOARD_VERSION = readDashboardVersion();
+
 function readStatic(file) {
   return fs.readFileSync(path.join(HERE, file), 'utf8');
 }
@@ -170,6 +180,8 @@ export async function createDashboardService(options = {}) {
   if (!calibration || typeof calibration !== 'object') calibration = {};
   let lastHookSession = readJsonSafe(activeSessionFile, null);
   const idleProbes = new Map();
+  const runningOrderMap = new Map();
+  let runningOrderSeq = 0;
 
   function recordActiveSession(meta) {
     if (!meta?.conversationId) return;
@@ -255,6 +267,33 @@ export async function createDashboardService(options = {}) {
     const trajMap = new Map(trajectories.map((tr) => [tr.conversationId, tr]));
     const hookSession = getLatestHookSession();
 
+    const rootTrajs = trajectories.filter(
+      (tr) => !tr.rootConversationId || tr.rootConversationId === tr.conversationId
+    );
+    const candidates = rootTrajs.length ? rootTrajs : trajectories;
+
+    // Lock relative order while conversations run concurrently so cards do not jump.
+    const runningTrajsRaw = candidates.filter((tr) => tr.isRunning);
+    const runningIdSet = new Set(runningTrajsRaw.map((tr) => tr.conversationId));
+    for (const id of runningOrderMap.keys()) {
+      if (!runningIdSet.has(id)) runningOrderMap.delete(id);
+    }
+    const newlyRunning = runningTrajsRaw
+      .filter((tr) => !runningOrderMap.has(tr.conversationId))
+      .sort((a, b) => {
+        const viewDiff = (b.lastUserViewMs || 0) - (a.lastUserViewMs || 0);
+        if (viewDiff !== 0) return viewDiff;
+        const modDiff = (b.lastModifiedMs || 0) - (a.lastModifiedMs || 0);
+        if (modDiff !== 0) return modDiff;
+        return String(a.conversationId).localeCompare(String(b.conversationId));
+      });
+    for (const tr of newlyRunning) {
+      runningOrderMap.set(tr.conversationId, ++runningOrderSeq);
+    }
+    const runningTrajs = [...runningTrajsRaw].sort(
+      (a, b) => (runningOrderMap.get(a.conversationId) || 0) - (runningOrderMap.get(b.conversationId) || 0)
+    );
+
     const cleanReq = typeof requestedConvId === 'string' && requestedConvId.trim()
       ? requestedConvId.trim()
       : 'auto';
@@ -266,16 +305,15 @@ export async function createDashboardService(options = {}) {
     if (isManual) {
       activeConvId = cleanReq;
       detectionSource = 'manual';
+    } else if (runningTrajs.length > 0) {
+      const topTraj = runningTrajs[0];
+      activeConvId = topTraj.conversationId;
+      detectionSource = topTraj.lastUserViewMs > 0 ? 'live-view' : 'live-recent';
     } else {
-      const rootTrajs = trajectories.filter(
-        (tr) => !tr.rootConversationId || tr.rootConversationId === tr.conversationId
-      );
-      const candidates = rootTrajs.length ? rootTrajs : trajectories;
       const sortedTrajs = [...candidates].sort((a, b) => {
         const aView = a.lastUserViewMs || 0;
         const bView = b.lastUserViewMs || 0;
         if (aView !== bView) return bView - aView;
-        if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1;
         return (b.lastModifiedMs || 0) - (a.lastModifiedMs || 0);
       });
 
@@ -367,14 +405,30 @@ export async function createDashboardService(options = {}) {
       };
     };
 
-    const current = await resolveDetail(activeConvId);
+    const activeConvIds = [];
+    const activeIdSet = new Set();
+    const pushActiveId = (id) => {
+      if (!id || activeIdSet.has(id)) return;
+      activeIdSet.add(id);
+      activeConvIds.push(id);
+    };
+    if (isManual) pushActiveId(activeConvId);
+    for (const tr of runningTrajs) pushActiveId(tr.conversationId);
+    if (!activeConvIds.length && activeConvId) pushActiveId(activeConvId);
+
+    const activeConversations = (await Promise.all(activeConvIds.map((id) => resolveDetail(id)))).filter(Boolean);
+    const current = activeConversations.find((c) => c.conversationId === activeConvId) || activeConversations[0] || null;
+    const activeConvMap = new Map(activeConversations.map((c) => [c.conversationId, c]));
 
     if (!includeList) {
       return {
         selectionMode: isManual ? 'manual' : 'auto',
         activeConversationId: activeConvId,
+        activeConversationIds: activeConversations.map((c) => c.conversationId),
+        runningCount: runningTrajs.length,
         detectionSource,
         current,
+        activeConversations,
         conversations: [],
       };
     }
@@ -386,7 +440,7 @@ export async function createDashboardService(options = {}) {
       if (tr.rootConversationId && tr.rootConversationId !== tr.conversationId) continue;
       seenIds.add(tr.conversationId);
       const localEntry = localMap.get(tr.conversationId);
-      const ctx = localEntry?.contextInfo || (current?.conversationId === tr.conversationId ? current : null);
+      const ctx = localEntry?.contextInfo || activeConvMap.get(tr.conversationId) || null;
       const maxContextTokens = Number(ctx?.maxContextTokens || 0);
       const usedTokens = Number(ctx?.usedTokens || 0);
       mergedEntries.push({
@@ -422,22 +476,28 @@ export async function createDashboardService(options = {}) {
       });
     }
 
-    if (current && !seenIds.has(current.conversationId)) {
+    for (const activeItem of activeConversations) {
+      if (seenIds.has(activeItem.conversationId)) continue;
+      seenIds.add(activeItem.conversationId);
       mergedEntries.unshift({
-        conversationId: current.conversationId,
-        title: current.title,
-        modelId: current.modelId,
-        displayName: current.displayName,
-        usedTokens: current.usedTokens,
-        maxContextTokens: current.maxContextTokens,
-        usageRatio: current.usageRatio,
-        isRunning: current.isRunning,
-        lastModifiedMs: current.lastModifiedMs,
-        lastUserViewMs: current.lastUserViewMs,
+        conversationId: activeItem.conversationId,
+        title: activeItem.title,
+        modelId: activeItem.modelId,
+        displayName: activeItem.displayName,
+        usedTokens: activeItem.usedTokens,
+        maxContextTokens: activeItem.maxContextTokens,
+        usageRatio: activeItem.usageRatio,
+        isRunning: activeItem.isRunning,
+        lastModifiedMs: activeItem.lastModifiedMs,
+        lastUserViewMs: activeItem.lastUserViewMs,
       });
     }
 
     mergedEntries.sort((a, b) => {
+      if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1;
+      const aOrder = runningOrderMap.get(a.conversationId) || 0;
+      const bOrder = runningOrderMap.get(b.conversationId) || 0;
+      if (aOrder && bOrder && aOrder !== bOrder) return aOrder - bOrder;
       const aScore = Math.max(a.lastUserViewMs || 0, a.lastModifiedMs || 0);
       const bScore = Math.max(b.lastUserViewMs || 0, b.lastModifiedMs || 0);
       return bScore - aScore;
@@ -446,8 +506,11 @@ export async function createDashboardService(options = {}) {
     return {
       selectionMode: isManual ? 'manual' : 'auto',
       activeConversationId: activeConvId,
+      activeConversationIds: activeConversations.map((c) => c.conversationId),
+      runningCount: runningTrajs.length,
       detectionSource,
       current,
+      activeConversations,
       conversations: mergedEntries.slice(0, 15),
     };
   }
@@ -471,6 +534,8 @@ export async function createDashboardService(options = {}) {
 
     return {
       revision,
+      appVersion: DASHBOARD_VERSION,
+      nodeVersion: process.version,
       hostTheme,
       quota,
       sessionContext,
@@ -489,8 +554,16 @@ export async function createDashboardService(options = {}) {
   async function getVersion(convId = 'auto') {
     const merged = syncManager.lastMerged;
     const ctxSnap = await buildSessionContext(convId, { forceTrajectories: false, includeList: false }).catch(() => null);
+    const activeSessions = (ctxSnap?.activeConversations || []).map((c) => ({
+      conversationId: c.conversationId,
+      usedTokens: c.usedTokens || 0,
+      maxContextTokens: c.maxContextTokens || 0,
+      isRunning: Boolean(c.isRunning),
+    }));
     return {
       revision,
+      appVersion: DASHBOARD_VERSION,
+      nodeVersion: process.version,
       lastSyncAt: merged?.syncStatus?.lastSyncAt || syncManager.lastSyncAt || 0,
       totalTokens: merged?.merged?.totals?.totalTokens || 0,
       generations: merged?.merged?.totals?.generations || 0,
@@ -499,6 +572,8 @@ export async function createDashboardService(options = {}) {
       activeUsedTokens: ctxSnap?.current?.usedTokens || 0,
       activeMaxContextTokens: ctxSnap?.current?.maxContextTokens || 0,
       activeIsRunning: Boolean(ctxSnap?.current?.isRunning),
+      runningCount: ctxSnap?.runningCount || 0,
+      activeSessions,
     };
   }
 
@@ -521,6 +596,8 @@ export async function createDashboardService(options = {}) {
       candidates: updated.candidates,
       dashboard: {
         revision,
+        appVersion: DASHBOARD_VERSION,
+        nodeVersion: process.version,
         hostTheme,
         quota,
         sessionContext,

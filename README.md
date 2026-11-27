@@ -7,7 +7,7 @@
 ## 核心特性
 
 - **原生侧边栏集成**：遵循 Antigravity 插件与 Sidecar 规范（`SIDECAR_UI_ENTRYPOINT_AUX_PANE`），**不修改** `app.asar`，不注入编辑器 DOM。
-- **当前对话上下文监控**：实时读取当前活跃会话的上下文窗口上限（`maxContextTokens`）与当前已用上下文（优先采用 API 实测 `promptTokens + responseTokens`，流式阶段回退本地预估值），支持自动跟随活跃会话或手动切换查看近期本地会话，并分级提示剩余容量。
+- **活动对话上下文监控**：同时展示所有正在运行的活动会话（空闲时回退展示最近活跃会话）的上下文窗口上限（`maxContextTokens`）与当前已用上下文（优先采用 API 实测 `promptTokens + responseTokens`，流式阶段回退本地预估值），多会话并发运行时稳定排序不跳动，并分级提示剩余容量。
 - **多周期统计与交叉筛选**：**设备** 与 **模型** 视图支持按 `5h` / `今日` / `7d` / `全部` 四个周期统计（基于本地 15 分钟模型时间片 `bySlotModel` 聚合并兼容旧版快照回退），支持按实时有用量模型筛选设备、按设备筛选模型，并按推理档位精准区分 `High`、`XHigh`、`Medium`、`Low` 等变体。
 - **信息层级与定制主题设计（纯 CSS、零依赖、零构建）**：内置夜空靛紫（Midnight Nocturne）深色与珠光雪白（Opal Pearl）浅色双主题，采用 `color-mix(in oklab, ...)` 分层令牌与 `@supports (appearance: base-select)` 原生顶层定制下拉菜单；14 天趋势采用平方根刻度并绘制峰值 / 中位参考线；文本对比度满足 WCAG AA（≥4.5:1），支持 `prefers-reduced-motion`、`forced-colors`，并以流体间距 + `auto-fit` 网格 + 容器查询自适应窄面板（实测 200px 宽度下无文字溢出框外）。
 - **彻底独立的 Conda 环境**：提供最小化 `environment.yml`（环境名 `agy_sync_dashboard`，仅包含独立 Python 3.10+ 标准库环境，不污染系统或现有软件环境）；`install.ps1`、`install.sh` 与 `manage.py` 均支持自动创建并切换至该独立环境运行。

@@ -223,11 +223,14 @@ test('SyncManager writes atomic device snapshots, ignores Syncthing conflict/tem
       assert.equal(dashRes.status, 200);
       const dash = await dashRes.json();
       assert.equal(dash.merged.totals.totalTokens, 1500);
+      assert.match(String(dash.appVersion || ''), /^\d+\.\d+\.\d+/);
+      assert.ok(dash.nodeVersion);
 
       const htmlRes = await fetch(`http://127.0.0.1:${port}/`);
       assert.equal(htmlRes.status, 200);
       const html = await htmlRes.text();
       assert.match(html, /role="tablist"/);
+      assert.match(html, /id="settings-version"/);
     } finally {
       await new Promise((r) => server.close(r));
     }
@@ -817,17 +820,58 @@ test('sessionContext tracks active conversation via live trajectories, hook upda
     assert.equal(dashAuto.sessionContext.selectionMode, 'auto');
     assert.equal(dashAuto.sessionContext.detectionSource, 'live-view');
     assert.equal(dashAuto.sessionContext.current.conversationId, 'conv-2');
+    assert.equal(dashAuto.sessionContext.runningCount, 1);
+    assert.equal(dashAuto.sessionContext.activeConversations.length, 1);
+    assert.equal(dashAuto.sessionContext.activeConversations[0].conversationId, 'conv-2');
     assert.equal(dashAuto.sessionContext.current.usedTokens, 204800);
     assert.equal(dashAuto.sessionContext.current.maxContextTokens, 512000);
     assert.equal(dashAuto.sessionContext.current.remainingTokens, 307200);
     assert.ok(Math.abs(dashAuto.sessionContext.current.usageRatio - 0.4) < 0.001);
 
-    // /api/version exposes active conversation, context tokens, and running state
+    // /api/version exposes active conversation, context tokens, running state, and activeSessions
     const ver = await (await fetch(`${base}/api/version`)).json();
     assert.equal(ver.activeConvId, 'conv-2');
     assert.equal(ver.activeUsedTokens, 204800);
     assert.equal(ver.activeMaxContextTokens, 512000);
     assert.equal(ver.activeIsRunning, true);
+    assert.equal(ver.runningCount, 1);
+    assert.equal(ver.activeSessions.length, 1);
+    assert.equal(ver.activeSessions[0].conversationId, 'conv-2');
+
+    // Concurrent running conversations are all returned and keep stable order when timestamps flip
+    liveTrajectories = [
+      { ...trajectories[0], status: 'CASCADE_RUN_STATUS_RUNNING', isRunning: true },
+      { ...trajectories[1] },
+    ];
+    const dashMulti1 = await (await fetch(`${base}/api/session-context`)).json();
+    assert.equal(dashMulti1.sessionContext.runningCount, 2);
+    assert.deepEqual(
+      dashMulti1.sessionContext.activeConversations.map((c) => c.conversationId),
+      ['conv-2', 'conv-1']
+    );
+    const verMulti = await (await fetch(`${base}/api/version`)).json();
+    assert.equal(verMulti.runningCount, 2);
+    assert.equal(verMulti.activeSessions.length, 2);
+
+    // Simulate conv-1 receiving newer view/modified timestamps while both still run -> order must stay locked
+    liveTrajectories = [
+      {
+        ...trajectories[0],
+        status: 'CASCADE_RUN_STATUS_RUNNING',
+        isRunning: true,
+        lastUserViewMs: nowMs + 10_000,
+        lastModifiedMs: nowMs + 10_000,
+      },
+      { ...trajectories[1] },
+    ];
+    const dashMulti2 = await (await fetch(`${base}/api/session-context`)).json();
+    assert.deepEqual(
+      dashMulti2.sessionContext.activeConversations.map((c) => c.conversationId),
+      ['conv-2', 'conv-1']
+    );
+
+    // Restore original single-running trajectories
+    liveTrajectories = trajectories;
 
     // Lightweight /api/session-context updates current session without full sync
     const ctxOnly = await (await fetch(`${base}/api/session-context`)).json();

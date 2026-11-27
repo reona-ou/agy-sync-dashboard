@@ -594,6 +594,19 @@ body {
   border-color: var(--agy-accent-line);
 }
 
+.card-head-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.card-head-tags > .tag {
+  max-width: min(180px, 100%);
+}
+
 /* -------------------------------------------------------------------- kpi */
 
 /* auto-fit, not repeat(2, …): a tile drops to one column the moment its label
@@ -808,6 +821,16 @@ body {
 
 /* -------------------------------------------------------- session context */
 
+.ctx-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
 .ctx-box {
   display: flex;
   flex-direction: column;
@@ -819,13 +842,31 @@ body {
   border: 1px solid var(--agy-border-soft);
 }
 
+.ctx-box.live {
+  border-color: color-mix(in oklab, var(--agy-ok) 34%, var(--agy-border-soft));
+}
+
 .ctx-conv-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 2px 8px;
+  gap: 3px 8px;
   min-width: 0;
+}
+
+.ctx-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ctx-model-tag {
+  max-width: 150px;
 }
 
 .ctx-conv-name {

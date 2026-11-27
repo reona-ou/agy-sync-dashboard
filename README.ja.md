@@ -7,7 +7,7 @@ Antigravity ネイティブ右サイドバー（補助ペイン）プラグイ�
 ## 主な特徴
 
 - **ネイティブサイドバー統合**：Antigravity プラグインおよび Sidecar 仕様（`SIDECAR_UI_ENTRYPOINT_AUX_PANE`）に準拠し、`app.asar` の改変や DOM 注入を行いません。
-- **現在の会話コンテキスト表示**：アクティブな会話のコンテキスト上限（`maxContextTokens`）と現在の使用量（API 実測の `promptTokens + responseTokens`、生成中はローカル推定値へフォールバック）をリアルタイム表示。アクティブ会話の自動追従と最近のローカル会話への手動切替に対応し、使用率に応じたプログレスバーと残量を表示します。
+- **アクティブな会話コンテキスト表示**：実行中のすべての会話（待機中は最新の会話へフォールバック）のコンテキスト上限（`maxContextTokens`）と現在の使用量（API 実測の `promptTokens + responseTokens`、生成中はローカル推定値へフォールバック）を一覧でリアルタイム表示。複数会話の同時実行時も順序を固定してチラつきを防ぎ、使用率に応じたプログレスバーと残量を表示します。
 - **期間別集計＆クロスフィルタリング**：**デバイス** と **モデル** タブで `5h` / `今日` / `7d` / `累計` の 4 期間集計に対応（15 分粒度 `bySlotModel` スライス＋旧スナップショットへのフォールバック）。使用量のあるモデルでのデバイス絞り込みやデバイス別のモデル表示、さらに `High` / `XHigh` / `Medium` / `Low` など推論ティアの識別にも対応しています。
 - **視覚階層＆カスタムコントロール設計（純 CSS・依存関係ゼロ・ビルド不要）**：Midnight Nocturne（ダーク）と Opal Pearl（ライト）の 2 テーマに加え、`color-mix(in oklab, ...)` サーフェストークンと `@supports (appearance: base-select)` によるカスタムドロップダウンを採用。14 日トレンドは平方根スケール＋ピーク/中位ガイドラインを備え、コントラストは WCAG AA（4.5:1 以上）、`prefers-reduced-motion`・`forced-colors`・幅 200px までの狭いペインに対応しています。
 - **完全に独立した Conda 環境**：最小限の `environment.yml`（環境名 `agy_sync_dashboard`、Python 3.10+ 標準ライブラリのみ）を同梱。`install.ps1` / `install.sh` / `manage.py` は自動的に `agy_sync_dashboard` 環境を作成・使用し、システムや他ソフトウェアの環境と完全に分離されます。

@@ -144,6 +144,49 @@ test('vscode-extension formatStatusBarCapsule renders context, quota, cache, spe
     assert.equal(critical.warnLevel, 2);
     assert.ok(critical.text.includes('$(loading~spin)'));
     assert.ok(critical.text.includes('gen…'));
+
+    const multi = formatStatusBarCapsule({
+      sessionContext: {
+        current: {
+          conversationId: 'c1',
+          title: 'Session One',
+          displayName: 'Gemini 4 Hydrogen (High)',
+          usedTokens: 100000,
+          maxContextTokens: 500000,
+          remainingTokens: 400000,
+          usageRatio: 0.2,
+          isRunning: true,
+        },
+        activeConversations: [
+          {
+            conversationId: 'c1',
+            title: 'Session One',
+            displayName: 'Gemini 4 Hydrogen (High)',
+            usedTokens: 100000,
+            maxContextTokens: 500000,
+            remainingTokens: 400000,
+            usageRatio: 0.2,
+            isRunning: true,
+          },
+          {
+            conversationId: 'c2',
+            title: 'Session Two',
+            displayName: 'Gemini 3.8 Flash (High)',
+            usedTokens: 64000,
+            maxContextTokens: 256000,
+            remainingTokens: 192000,
+            usageRatio: 0.25,
+            isRunning: true,
+          },
+        ],
+      },
+      quota: { connected: false, groups: [] },
+    });
+    assert.ok(multi.text.includes('$(loading~spin)'));
+    assert.ok(multi.text.includes('2 active'));
+    assert.ok(multi.tooltip.value.includes('Active Sessions (2 · 2 running)'));
+    assert.ok(multi.tooltip.value.includes('Session One'));
+    assert.ok(multi.tooltip.value.includes('Session Two'));
   } finally {
     Module._load = origLoad;
   }

@@ -107,7 +107,14 @@ function buildWebviewHtml(webview, extensionPath, runtimeRoot) {
 }
 
 function formatStatusBarCapsule(data) {
-  const cur = data?.sessionContext?.current || null;
+  const activeList =
+    Array.isArray(data?.sessionContext?.activeConversations) && data.sessionContext.activeConversations.length
+      ? data.sessionContext.activeConversations
+      : data?.sessionContext?.current
+        ? [data.sessionContext.current]
+        : [];
+  const runningList = activeList.filter((c) => c?.isRunning);
+  const cur = activeList[0] || data?.sessionContext?.current || null;
   const gen = cur?.latestGeneration || data?.device?.local?.latestGeneration || null;
   const quota = data?.quota || null;
 
@@ -154,15 +161,18 @@ function formatStatusBarCapsule(data) {
       : null;
   segs.push(typeof cacheRate === 'number' ? `⚡${Math.round(cacheRate * 100)}%` : '⚡--');
 
-  // 4. Generation speed
+  // 4. Generation speed / multi-session indicator
   const tps = Number(gen?.tps || 0);
   if (cur?.isRunning && !(tps > 0)) {
     segs.push('gen…');
   } else if (tps > 0) {
     segs.push(`${tps} t/s`);
   }
+  if (runningList.length > 1) {
+    segs.push(`${runningList.length} active`);
+  }
 
-  const icon = cur?.isRunning ? '$(loading~spin)' : '$(pulse)';
+  const icon = runningList.length > 0 || cur?.isRunning ? '$(loading~spin)' : '$(pulse)';
   const text = `${icon} ${segs.join(' · ')}`;
 
   // Rich hover tooltip
@@ -170,21 +180,42 @@ function formatStatusBarCapsule(data) {
   md.isTrusted = false;
   md.supportHtml = false;
 
-  const title = cur?.title || 'AGY Sync Dashboard';
-  const modelName = cur?.displayName || cur?.modelId || gen?.displayName || '';
-  md.appendMarkdown(`**${title}**${modelName ? ` · \`${modelName}\`` : ''}\n\n`);
-
-  if (cur && (hasMax || cur.usedTokens > 0)) {
+  if (activeList.length > 1) {
     md.appendMarkdown(
-      `- **Context**: ${fmtTokens(cur.usedTokens)}${hasMax ? ` / ${fmtTokens(cur.maxContextTokens)} (**${fmtPct(ratio)}**, left ${fmtTokens(cur.remainingTokens)})` : ''}\n`
+      `**Active Sessions (${activeList.length}${runningList.length > 0 ? ` · ${runningList.length} running` : ''})**\n\n`
     );
-    const parts = [];
-    if (cur.inputTokens > 0) parts.push(`In ${fmtTokens(cur.inputTokens)}`);
-    if (cur.cacheReadTokens > 0) parts.push(`CacheR ${fmtTokens(cur.cacheReadTokens)}`);
-    if (cur.cacheWriteTokens > 0) parts.push(`CacheW ${fmtTokens(cur.cacheWriteTokens)}`);
-    if (cur.responseTokens > 0) parts.push(`Out ${fmtTokens(cur.responseTokens)}`);
-    if (parts.length) {
-      md.appendMarkdown(`  - Breakdown: ${parts.join(' · ')}\n`);
+    for (const sess of activeList) {
+      const sTitle = sess?.title || sess?.conversationId || 'Session';
+      const sModel = sess?.displayName || sess?.modelId || '';
+      const sHasMax = Number(sess?.maxContextTokens || 0) > 0;
+      const sRatio = sHasMax ? Math.max(0, Number(sess.usageRatio || 0)) : 0;
+      const sCtx = sHasMax
+        ? `${fmtTokens(sess.usedTokens)} / ${fmtTokens(sess.maxContextTokens)} (**${fmtPct(sRatio)}**)`
+        : Number(sess?.usedTokens || 0) > 0
+          ? `${fmtTokens(sess.usedTokens)} tok`
+          : '--';
+      md.appendMarkdown(
+        `- **${sTitle}**${sModel ? ` · \`${sModel}\`` : ''}${sess?.isRunning ? ' *(running)*' : ''}: ${sCtx}\n`
+      );
+    }
+    md.appendMarkdown('\n');
+  } else {
+    const title = cur?.title || 'AGY Sync Dashboard';
+    const modelName = cur?.displayName || cur?.modelId || gen?.displayName || '';
+    md.appendMarkdown(`**${title}**${modelName ? ` · \`${modelName}\`` : ''}\n\n`);
+
+    if (cur && (hasMax || cur.usedTokens > 0)) {
+      md.appendMarkdown(
+        `- **Context**: ${fmtTokens(cur.usedTokens)}${hasMax ? ` / ${fmtTokens(cur.maxContextTokens)} (**${fmtPct(ratio)}**, left ${fmtTokens(cur.remainingTokens)})` : ''}\n`
+      );
+      const parts = [];
+      if (cur.inputTokens > 0) parts.push(`In ${fmtTokens(cur.inputTokens)}`);
+      if (cur.cacheReadTokens > 0) parts.push(`CacheR ${fmtTokens(cur.cacheReadTokens)}`);
+      if (cur.cacheWriteTokens > 0) parts.push(`CacheW ${fmtTokens(cur.cacheWriteTokens)}`);
+      if (cur.responseTokens > 0) parts.push(`Out ${fmtTokens(cur.responseTokens)}`);
+      if (parts.length) {
+        md.appendMarkdown(`  - Breakdown: ${parts.join(' · ')}\n`);
+      }
     }
   }
 
