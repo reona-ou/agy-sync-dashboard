@@ -32,10 +32,12 @@ const FOLDER_PICKER_PROMPTS = {
   ja: 'マルチデバイス同期フォルダを選択',
 };
 
-export async function pickNativeFolder(initialDir = '', lang = 'zh-CN') {
+export async function pickNativeFolder(initialDir = '', lang = 'zh-CN', options = {}) {
   const safeInit = initialDir && fs.existsSync(initialDir) ? path.resolve(initialDir) : '';
   const promptText = FOLDER_PICKER_PROMPTS[lang] || FOLDER_PICKER_PROMPTS.en;
-  if (process.platform === 'win32') {
+  const platform = options.platform || process.platform;
+  const env = options.env || process.env;
+  if (platform === 'win32') {
     const psScript = [
       'Add-Type -AssemblyName System.Windows.Forms;',
       '$f = New-Object System.Windows.Forms.Form;',
@@ -50,16 +52,21 @@ export async function pickNativeFolder(initialDir = '', lang = 'zh-CN') {
       const { stdout } = await execFilePromise(
         'powershell.exe',
         ['-NoProfile', '-Sta', '-NonInteractive', '-Command', psScript],
-        { env: { ...process.env, AGY_INIT_DIR: safeInit, AGY_PICKER_PROMPT: promptText }, windowsHide: true }
+        { env: { ...env, AGY_INIT_DIR: safeInit, AGY_PICKER_PROMPT: promptText }, windowsHide: true }
       );
       const selected = String(stdout || '').trim();
       return selected ? { cancelled: false, path: selected } : { cancelled: true, path: '' };
     } catch (err) {
-      return { cancelled: true, path: '', error: err?.message || 'Folder dialog unavailable' };
+      return {
+        cancelled: true,
+        path: '',
+        unsupported: true,
+        error: err?.message || 'Folder dialog unavailable',
+      };
     }
   }
 
-  if (process.platform === 'darwin') {
+  if (platform === 'darwin') {
     try {
       const { stdout } = await execFilePromise('osascript', [
         '-e',
@@ -67,25 +74,48 @@ export async function pickNativeFolder(initialDir = '', lang = 'zh-CN') {
       ]);
       const selected = String(stdout || '').trim().replace(/\/+$/, '');
       return selected ? { cancelled: false, path: selected } : { cancelled: true, path: '' };
-    } catch {
-      return { cancelled: true, path: '' };
+    } catch (err) {
+      const msg = String(err?.stderr || err?.message || '');
+      if (/user canceled|-128/i.test(msg)) {
+        return { cancelled: true, path: '' };
+      }
+      return {
+        cancelled: true,
+        path: '',
+        unsupported: true,
+        error: err?.message || 'Folder dialog unavailable',
+      };
     }
   }
 
-  for (const [bin, args] of [
-    ['zenity', ['--file-selection', '--directory', `--title=${promptText}`]],
-    ['kdialog', ['--getexistingdirectory', safeInit || process.env.HOME || '.']],
-  ]) {
-    try {
-      const { stdout } = await execFilePromise(bin, args);
-      const selected = String(stdout || '').trim();
-      if (selected) return { cancelled: false, path: selected };
-      return { cancelled: true, path: '' };
-    } catch (err) {
-      if (err?.code === 1 || err?.code === 5) return { cancelled: true, path: '' };
+  const hasDisplay = Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
+  if (hasDisplay) {
+    for (const [bin, args] of [
+      ['zenity', ['--file-selection', '--directory', `--title=${promptText}`]],
+      ['kdialog', ['--getexistingdirectory', safeInit || env.HOME || '.']],
+    ]) {
+      try {
+        const { stdout } = await execFilePromise(bin, args);
+        const selected = String(stdout || '').trim();
+        if (selected) return { cancelled: false, path: selected };
+        return { cancelled: true, path: '' };
+      } catch (err) {
+        const stderr = String(err?.stderr || '');
+        const displayError = /cannot open display|could not connect|no display|unable to open display|failed to open display/i.test(
+          stderr
+        );
+        if ((err?.code === 1 || err?.code === 5) && !displayError) {
+          return { cancelled: true, path: '' };
+        }
+      }
     }
   }
-  return { cancelled: true, path: '', error: 'No native folder picker (zenity/kdialog) available' };
+  return {
+    cancelled: true,
+    path: '',
+    unsupported: true,
+    error: 'No native folder picker (zenity/kdialog) available',
+  };
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

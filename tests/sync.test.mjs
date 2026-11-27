@@ -14,7 +14,7 @@ import {
   buildQuotaForecasts,
   classifyModelFamily,
 } from '../sidecars/dashboard/forecast.mjs';
-import { createDashboardService, createStandaloneHttpServer } from '../sidecars/dashboard/main.mjs';
+import { createDashboardService, createStandaloneHttpServer, pickNativeFolder } from '../sidecars/dashboard/main.mjs';
 import {
   normalizeQuotaSummary,
   normalizeTrajectorySummaries,
@@ -531,6 +531,13 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
     assert.match(stylesBody, /\.settings-card\s*\{[\s\S]*?max-width:\s*var\(--agy-content-max\)/);
     const appJsBody = await (await fetch(`${base}/app.js`)).text();
     assert.match(appJsBody, /\bja:\s*\{/);
+    assert.match(appJsBody, /folderPickerUnsupported:\s*'/);
+    assert.match(appJsBody, /res\?\.unsupported/);
+
+    // Verify headless Linux/SSH without DISPLAY reports unsupported cleanly
+    const headlessPick = await pickNativeFolder('', 'zh-CN', { platform: 'linux', env: {} });
+    assert.equal(headlessPick.cancelled, true);
+    assert.equal(headlessPick.unsupported, true);
 
     // Verify fresh SyncManager keeps all sync configs blank (local-only) by default
     const freshDataDir = path.join(tmpRoot, 'fresh-data');

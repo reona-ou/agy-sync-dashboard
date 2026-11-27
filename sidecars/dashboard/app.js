@@ -112,6 +112,7 @@
       syncDirPlaceholder: '选择或输入同步目录路径',
       pickFolderBtn: '选择目录…',
       pickingBtn: '选择中…',
+      folderPickerUnsupported: '当前设备不支持浏览目录，请直接在上方输入框填写路径。',
       testFolderBtn: '测试目录',
       webdavSectionTitle: 'WebDAV 云同步',
       testWebdavBtn: '测试连接',
@@ -278,6 +279,7 @@
       syncDirPlaceholder: 'Select or enter sync folder path',
       pickFolderBtn: 'Browse…',
       pickingBtn: 'Opening…',
+      folderPickerUnsupported: 'Directory browsing is not supported on this device. Please enter the path manually.',
       testFolderBtn: 'Test Folder',
       webdavSectionTitle: 'WebDAV Remote Sync',
       testWebdavBtn: 'Test Connection',
@@ -444,6 +446,7 @@
       syncDirPlaceholder: '同期フォルダのパスを選択または入力',
       pickFolderBtn: '選択…',
       pickingBtn: '選択中…',
+      folderPickerUnsupported: '現在のデバイスではディレクトリ参照に対応していません。上の入力欄に直接パスを入力してください。',
       testFolderBtn: 'フォルダテスト',
       webdavSectionTitle: 'WebDAV クラウド同期',
       testWebdavBtn: '接続テスト',
@@ -2228,6 +2231,12 @@
         if (!res?.cancelled && res?.path) {
           document.getElementById('input-syncdir').value = res.path;
           state.settingsDirty = true;
+        } else if (
+          res?.unsupported ||
+          (res?.error && /zenity|kdialog|no native folder picker|folder dialog unavailable/i.test(res.error))
+        ) {
+          showTestBox(false, t().folderPickerUnsupported);
+          document.getElementById('input-syncdir')?.focus();
         } else if (res?.error) {
           showTestBox(false, res.error);
         }
