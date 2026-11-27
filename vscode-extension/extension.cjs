@@ -2,7 +2,9 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const vscode = require('vscode');
 const { createBackendClient } = require('./backend-client.cjs');
 
@@ -255,6 +257,30 @@ function formatStatusBarCapsule(data) {
   return { text, tooltip: md, warnLevel: maxWarnLevel };
 }
 
+async function downloadAndInstallVsix(vsixAsset, latestVersion) {
+  const dlRes = await fetch(vsixAsset.url, {
+    headers: { 'User-Agent': 'agy-sync-dashboard' },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!dlRes.ok) {
+    throw new Error(`Failed to download VSIX (HTTP ${dlRes.status})`);
+  }
+  const tmpVsix = path.join(os.tmpdir(), `agy-sync-update-${Date.now()}-${path.basename(vsixAsset.name)}`);
+  try {
+    await fs.promises.writeFile(tmpVsix, Buffer.from(await dlRes.arrayBuffer()));
+    await vscode.commands.executeCommand('workbench.extensions.installExtension', vscode.Uri.file(tmpVsix));
+  } finally {
+    await fs.promises.unlink(tmpVsix).catch(() => {});
+  }
+  void vscode.window
+    .showInformationMessage(`AGY Sync Dashboard updated to v${latestVersion}. Reload window to apply.`, 'Reload Window')
+    .then((choice) => {
+      if (choice === 'Reload Window') {
+        void vscode.commands.executeCommand('workbench.action.reloadWindow');
+      }
+    });
+}
+
 async function activate(context) {
   const cfg = vscode.workspace.getConfiguration('agySyncDashboard');
   const nodePath = cfg.get('nodePath', '');
@@ -301,7 +327,8 @@ async function activate(context) {
       const { id, url, method, body } = msg;
       try {
         const parsed = new URL(url || '/', 'http://127.0.0.1');
-        if (parsed.pathname === '/api/settings/pick-folder' && String(method).toUpperCase() === 'POST') {
+        const upperMethod = String(method || 'GET').toUpperCase();
+        if (parsed.pathname === '/api/settings/pick-folder' && upperMethod === 'POST') {
           let initialDir = '';
           try {
             initialDir = JSON.parse(body || '{}')?.initialDir || '';
@@ -324,6 +351,97 @@ async function activate(context) {
             ok: true,
             bodyText: JSON.stringify(respBody),
           });
+          return;
+        }
+
+        if (parsed.pathname === '/api/update/check' && upperMethod === 'GET') {
+          const updaterPath = path.join(backend.runtimeRoot, 'sidecars', 'dashboard', 'updater.mjs');
+          const { checkForUpdates } = await import(pathToFileURL(updaterPath).href);
+          const currentVersion = String(context.extension?.packageJSON?.version || require('./package.json').version || '0.0.0');
+          const info = await checkForUpdates({ currentVersion });
+          void webview.postMessage({
+            type: 'agy-api-res',
+            id,
+            status: 200,
+            ok: true,
+            bodyText: JSON.stringify({
+              ...info,
+              mode: 'vscode-extension',
+              isDevRepo: false,
+              canSelfUpdate: Boolean(info.vsixAsset),
+              canReloadWindow: true,
+            }),
+          });
+          return;
+        }
+
+        if (parsed.pathname === '/api/update/apply' && upperMethod === 'POST') {
+          const updaterPath = path.join(backend.runtimeRoot, 'sidecars', 'dashboard', 'updater.mjs');
+          const { checkForUpdates, isAllowedGitHubUrl } = await import(pathToFileURL(updaterPath).href);
+          const currentVersion = String(context.extension?.packageJSON?.version || require('./package.json').version || '0.0.0');
+          const info = await checkForUpdates({ currentVersion });
+          if (!info.hasUpdate) {
+            void webview.postMessage({
+              type: 'agy-api-res',
+              id,
+              status: 200,
+              ok: true,
+              bodyText: JSON.stringify({
+                ok: true,
+                updated: false,
+                mode: 'vscode-extension',
+                currentVersion,
+                version: info.latestVersion,
+                releaseUrl: info.releaseUrl,
+              }),
+            });
+            return;
+          }
+          if (!info.vsixAsset?.url || !isAllowedGitHubUrl(info.vsixAsset.url)) {
+            await vscode.env.openExternal(vscode.Uri.parse(info.releaseUrl));
+            void webview.postMessage({
+              type: 'agy-api-res',
+              id,
+              status: 200,
+              ok: true,
+              bodyText: JSON.stringify({
+                ok: false,
+                openedExternal: true,
+                mode: 'vscode-extension',
+                releaseUrl: info.releaseUrl,
+                error: 'No VSIX asset found; opened release page',
+              }),
+            });
+            return;
+          }
+          await downloadAndInstallVsix(info.vsixAsset, info.latestVersion);
+          void webview.postMessage({
+            type: 'agy-api-res',
+            id,
+            status: 200,
+            ok: true,
+            bodyText: JSON.stringify({
+              ok: true,
+              updated: true,
+              mode: 'vscode-extension',
+              previousVersion: currentVersion,
+              version: info.latestVersion,
+              restartRequired: true,
+              canReloadWindow: true,
+            }),
+          });
+          return;
+        }
+
+        if (parsed.pathname === '/api/update/reload' && upperMethod === 'POST') {
+          void webview.postMessage({
+            type: 'agy-api-res',
+            id,
+            status: 200,
+            ok: true,
+            bodyText: JSON.stringify({ ok: true }),
+          });
+          void vscode.commands.executeCommand('workbench.action.reloadWindow');
           return;
         }
 
@@ -497,6 +615,44 @@ async function activate(context) {
       if (backend) void backend.dispose();
     },
   });
+
+  if (backend) {
+    const startupTimer = setTimeout(async () => {
+      try {
+        const settingsRes = await backend.handleApi('/api/settings', 'GET', '');
+        if (!settingsRes.ok) return;
+        const parsedSettings = JSON.parse(settingsRes.bodyText || '{}');
+        if (parsedSettings?.settings?.checkUpdatesOnStartup === false) return;
+
+        const updaterPath = path.join(backend.runtimeRoot, 'sidecars', 'dashboard', 'updater.mjs');
+        const { checkForUpdates, isAllowedGitHubUrl } = await import(pathToFileURL(updaterPath).href);
+        const currentVersion = String(context.extension?.packageJSON?.version || require('./package.json').version || '0.0.0');
+        const info = await checkForUpdates({ currentVersion });
+        if (!info.hasUpdate) return;
+        if (context.globalState?.get('agySync.lastPromptedVersion') === info.latestVersion) return;
+        await context.globalState?.update('agySync.lastPromptedVersion', info.latestVersion);
+
+        const actionLabel = info.vsixAsset ? 'Update Now' : 'View Release';
+        const choice = await vscode.window.showInformationMessage(
+          `AGY Sync Dashboard v${info.latestVersion} is available (current v${currentVersion}).`,
+          actionLabel,
+          'Disable Startup Check'
+        );
+        if (choice === 'Disable Startup Check') {
+          await backend.handleApi('/api/settings', 'POST', JSON.stringify({ checkUpdatesOnStartup: false }));
+          broadcastMessage({ type: 'agy-refresh' });
+        } else if (choice === 'View Release') {
+          await vscode.env.openExternal(vscode.Uri.parse(info.releaseUrl));
+        } else if (choice === 'Update Now' && info.vsixAsset?.url && isAllowedGitHubUrl(info.vsixAsset.url)) {
+          await downloadAndInstallVsix(info.vsixAsset, info.latestVersion);
+        }
+      } catch {
+        // Ignore offline/network errors during silent startup update check
+      }
+    }, 3000);
+    startupTimer.unref?.();
+    context.subscriptions.push({ dispose: () => clearTimeout(startupTimer) });
+  }
 }
 
 function deactivate() {}

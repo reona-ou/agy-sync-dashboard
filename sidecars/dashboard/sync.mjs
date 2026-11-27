@@ -46,6 +46,7 @@ export function sanitizeSettingsForClient(config = {}) {
     deviceName: config.deviceName || '',
     language: normalizeLanguage(config.language),
     syncIntervalMs: Number(config.syncIntervalMs || DEFAULT_SYNC_INTERVAL_MS),
+    checkUpdatesOnStartup: config.checkUpdatesOnStartup !== false,
     updatedAt: Number(config.updatedAt || 0),
   };
 }
@@ -676,6 +677,9 @@ export class SyncManager {
     if (typeof patch.syncIntervalMs === 'number' && Number.isFinite(patch.syncIntervalMs)) {
       nextConfig.syncIntervalMs = Math.min(86_400_000, Math.max(3000, Math.floor(patch.syncIntervalMs)));
     }
+    if (typeof patch.checkUpdatesOnStartup === 'boolean') {
+      nextConfig.checkUpdatesOnStartup = patch.checkUpdatesOnStartup;
+    }
 
     return nextConfig;
   }
@@ -711,6 +715,7 @@ export class SyncManager {
         deviceName: device.deviceName || os.hostname(),
         language: 'zh-CN',
         syncIntervalMs: DEFAULT_SYNC_INTERVAL_MS,
+        checkUpdatesOnStartup: true,
         updatedAt: Date.now(),
       };
       dirty = true;
@@ -738,6 +743,10 @@ export class SyncManager {
       }
       if (!config.syncIntervalMs) {
         config.syncIntervalMs = DEFAULT_SYNC_INTERVAL_MS;
+        dirty = true;
+      }
+      if (typeof config.checkUpdatesOnStartup !== 'boolean') {
+        config.checkUpdatesOnStartup = true;
         dirty = true;
       }
     }

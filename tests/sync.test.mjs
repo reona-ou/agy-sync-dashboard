@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import zlib from 'node:zlib';
 import { computeCacheHitRate, toLocalDateKey } from '../sidecars/dashboard/collector.mjs';
 import { discoverLanguageServer } from '../sidecars/dashboard/discovery.mjs';
 import {
@@ -21,6 +22,7 @@ import {
   parseRpcGeneratorContext,
 } from '../sidecars/dashboard/quota.mjs';
 import { SNAPSHOT_SCHEMA_VERSION, SyncManager, mergeDeviceSnapshots } from '../sidecars/dashboard/sync.mjs';
+import { compareSemver, extractTarGzBuffer, isAllowedGitHubUrl } from '../sidecars/dashboard/updater.mjs';
 import { parsePropfindXml } from '../sidecars/dashboard/webdav.mjs';
 
 test('mergeDeviceSnapshots sums multiple devices additively and computes blended cache rate', () => {
@@ -523,6 +525,10 @@ test('WebDAV sync and settings endpoints handle MKCOL/PROPFIND/PUT/GET, testConn
     assert.match(htmlBody, /value="zh-CN"/);
     assert.match(htmlBody, /value="en"/);
     assert.match(htmlBody, /value="ja"/);
+    assert.match(htmlBody, /id="btn-check-update"/);
+    assert.match(htmlBody, /id="chk-auto-update-check"/);
+    assert.match(htmlBody, /id="btn-update-pill"/);
+    assert.match(htmlBody, /id="update-status-box"/);
     assert.match(
       htmlBody,
       /id="panel-settings"[\s\S]*?<div class="stack">\s*<article class="card settings-card">/
@@ -1939,6 +1945,139 @@ test('WebDAV rate limit (503) avoids MKCOL amplification, applies cooldown, and 
     assert.equal(methodCounts.PROPFIND, hitsDuringBan);
   } finally {
     await new Promise((r) => davServer.close(r));
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+function buildTarRecord(entryName, content = '', typeFlag = '0') {
+  const data = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+  const header = Buffer.alloc(512, 0);
+  header.write(entryName.slice(0, 100), 0, 'utf8');
+  header.write('0000644\0', 100, 'ascii');
+  header.write('0000000\0', 108, 'ascii');
+  header.write('0000000\0', 116, 'ascii');
+  header.write(`${data.length.toString(8).padStart(11, '0')}\0`, 124, 'ascii');
+  header.write('00000000000\0', 136, 'ascii');
+  header.fill(0x20, 148, 156);
+  header.write(typeFlag, 156, 'ascii');
+  header.write('ustar\0', 257, 'ascii');
+  header.write('00', 263, 'ascii');
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += header[i];
+  header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 'ascii');
+  const pad = (512 - (data.length % 512)) % 512;
+  return Buffer.concat([header, data, Buffer.alloc(pad, 0)]);
+}
+
+test('updater checks GitHub releases, safely extracts tar.gz, and updates installed sidecar plugin', async () => {
+  assert.equal(compareSemver('1.7.2', '1.7.1'), 1);
+  assert.equal(compareSemver('v1.8.0', '1.7.9'), 1);
+  assert.equal(compareSemver('1.7.1', '1.7.1'), 0);
+  assert.equal(compareSemver('1.6.9', '1.7.0'), -1);
+
+  assert.equal(isAllowedGitHubUrl('https://github.com/reona-ou/agy-sync-dashboard/releases'), true);
+  assert.equal(isAllowedGitHubUrl('https://codeload.github.com/reona-ou/agy-sync-dashboard/tar.gz/refs/tags/v1.8.0'), true);
+  assert.equal(isAllowedGitHubUrl('https://objects.githubusercontent.com/github-production-release-asset/foo.vsix'), true);
+  assert.equal(isAllowedGitHubUrl('http://github.com/foo'), false);
+  assert.equal(isAllowedGitHubUrl('https://evil.example.com/archive.tar.gz'), false);
+
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'agy-updater-test-'));
+  try {
+    const tarStream = Buffer.concat([
+      buildTarRecord('pax_global_header', '52 comment=abc\n', 'g'),
+      buildTarRecord('reona-ou-agy-sync-dashboard-abc1234/', '', '5'),
+      buildTarRecord('reona-ou-agy-sync-dashboard-abc1234/plugin.json', JSON.stringify({ name: 'agy-sync-dashboard', version: '1.8.0' })),
+      buildTarRecord('reona-ou-agy-sync-dashboard-abc1234/sidecars/dashboard/new.mjs', 'export const v = 180;\n'),
+      buildTarRecord('reona-ou-agy-sync-dashboard-abc1234/../escape.txt', 'bad\n'),
+      Buffer.alloc(1024, 0),
+    ]);
+    const gzBuffer = zlib.gzipSync(tarStream);
+
+    const extractDir = path.join(tmpRoot, 'extract-check');
+    await extractTarGzBuffer(gzBuffer, extractDir, { stripComponents: 1 });
+    assert.equal(JSON.parse(await fs.readFile(path.join(extractDir, 'plugin.json'), 'utf8')).version, '1.8.0');
+    assert.equal(await fs.readFile(path.join(extractDir, 'sidecars', 'dashboard', 'new.mjs'), 'utf8'), 'export const v = 180;\n');
+    await assert.rejects(fs.access(path.join(tmpRoot, 'escape.txt')));
+
+    const pluginRoot = path.join(tmpRoot, 'installed-plugin');
+    await fs.mkdir(path.join(pluginRoot, 'sidecars', 'dashboard'), { recursive: true });
+    await fs.writeFile(path.join(pluginRoot, 'plugin.json'), JSON.stringify({ name: 'agy-sync-dashboard', version: '1.7.1' }));
+    await fs.writeFile(path.join(pluginRoot, 'sidecars', 'dashboard', 'stale.mjs'), 'old');
+
+    const dataDir = path.join(tmpRoot, 'data');
+    const mockFetch = async (url) => {
+      if (String(url).includes('api.github.com')) {
+        return new Response(
+          JSON.stringify({
+            tag_name: 'v1.8.0',
+            html_url: 'https://github.com/reona-ou/agy-sync-dashboard/releases/tag/v1.8.0',
+            tarball_url: 'https://codeload.github.com/reona-ou/agy-sync-dashboard/tar.gz/refs/tags/v1.8.0',
+            body: 'Bug fixes',
+            assets: [
+              {
+                name: 'agy-sync-dashboard-vscode-1.8.0.vsix',
+                browser_download_url: 'https://github.com/reona-ou/agy-sync-dashboard/releases/download/v1.8.0/agy-sync-dashboard-vscode-1.8.0.vsix',
+                size: 1234,
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(gzBuffer, { status: 200 });
+    };
+
+    const service = await createDashboardService({
+      dataDir,
+      pluginRoot,
+      fetchImpl: mockFetch,
+      paths: {
+        conversationsDir: path.join(tmpRoot, 'convs'),
+        summariesDb: path.join(tmpRoot, 'missing.db'),
+        pluginDataDir: dataDir,
+        pluginConfig: path.join(tmpRoot, 'missing.json'),
+      },
+    });
+    const server = createStandaloneHttpServer(service);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}`;
+
+    try {
+      const initSettings = await (await fetch(`${base}/api/settings`)).json();
+      assert.equal(initSettings.settings.checkUpdatesOnStartup, true);
+      const disabledSettings = await (
+        await fetch(`${base}/api/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ checkUpdatesOnStartup: false }),
+        })
+      ).json();
+      assert.equal(disabledSettings.settings.checkUpdatesOnStartup, false);
+
+      const checkRes = await (await fetch(`${base}/api/update/check`)).json();
+      assert.equal(checkRes.hasUpdate, true);
+      assert.equal(checkRes.currentVersion, '1.7.1');
+      assert.equal(checkRes.latestVersion, '1.8.0');
+      assert.equal(checkRes.canSelfUpdate, true);
+      assert.equal(checkRes.vsixAsset.name, 'agy-sync-dashboard-vscode-1.8.0.vsix');
+
+      const applyRes = await (await fetch(`${base}/api/update/apply`, { method: 'POST', body: '{}' })).json();
+      assert.equal(applyRes.updated, true);
+      assert.equal(applyRes.version, '1.8.0');
+      assert.equal(applyRes.restartRequired, true);
+      assert.equal(JSON.parse(await fs.readFile(path.join(pluginRoot, 'plugin.json'), 'utf8')).version, '1.8.0');
+      await assert.rejects(fs.access(path.join(pluginRoot, 'sidecars', 'dashboard', 'stale.mjs')));
+
+      // Guard: dev repo with .git refuses self-update
+      await fs.mkdir(path.join(pluginRoot, '.git'), { recursive: true });
+      const devCheck = await (await fetch(`${base}/api/update/check`)).json();
+      assert.equal(devCheck.isDevRepo, true);
+      assert.equal(devCheck.canSelfUpdate, false);
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+  } finally {
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }
 });

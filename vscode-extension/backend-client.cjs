@@ -231,6 +231,12 @@ async function createInProcessClient(runtimeRoot) {
       if (pathname === '/api/settings/test' && upperMethod === 'POST') {
         return jsonRes(200, await service.testSettings(bodyObj));
       }
+      if (pathname === '/api/update/check' && upperMethod === 'GET') {
+        return jsonRes(200, await service.checkUpdates());
+      }
+      if (pathname === '/api/update/apply' && upperMethod === 'POST') {
+        return jsonRes(200, await service.applyUpdate());
+      }
       return jsonRes(404, { error: `Unknown endpoint: ${pathname}` });
     } catch (err) {
       return jsonRes(err?.statusCode || 400, { error: err?.message || 'Internal error' });

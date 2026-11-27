@@ -11,6 +11,7 @@ import { loadSidecarSdk } from '../../compat/sdk.mjs';
 import { buildQuotaForecasts, mergeCalibrationMaps } from './forecast.mjs';
 import { QuotaClient } from './quota.mjs';
 import { SyncManager, sanitizeSettingsForClient } from './sync.mjs';
+import { applySidecarUpdate, checkForUpdates } from './updater.mjs';
 
 function execFilePromise(file, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -119,10 +120,15 @@ export async function pickNativeFolder(initialDir = '', lang = 'zh-CN', options 
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const PLUGIN_ROOT = path.resolve(HERE, '../..');
 
-function readDashboardVersion() {
-  for (const rel of ['../../plugin.json', '../../package.json', '../../../package.json']) {
-    const meta = readJsonSafe(path.resolve(HERE, rel), null);
+function readDashboardVersion(pluginRoot = PLUGIN_ROOT) {
+  for (const candidate of [
+    path.join(pluginRoot, 'plugin.json'),
+    path.join(pluginRoot, 'package.json'),
+    path.resolve(HERE, '../../../package.json'),
+  ]) {
+    const meta = readJsonSafe(candidate, null);
     if (meta?.version) return String(meta.version);
   }
   return '';
@@ -650,6 +656,48 @@ export async function createDashboardService(options = {}) {
     return buildThemeCss(theme);
   }
 
+  const updatePluginRoot = options.pluginRoot || PLUGIN_ROOT;
+  const updateFetch = options.fetchImpl || fetch;
+  let cachedUpdateCheck = null;
+
+  async function checkUpdates() {
+    const currentVersion = readDashboardVersion(updatePluginRoot) || DASHBOARD_VERSION;
+    const result = await checkForUpdates({
+      currentVersion,
+      pluginRoot: updatePluginRoot,
+      fetchImpl: updateFetch,
+    });
+    cachedUpdateCheck = { ...result, checkedAt: Date.now(), mode: 'sidecar' };
+    return cachedUpdateCheck;
+  }
+
+  async function applyUpdate() {
+    const currentVersion = readDashboardVersion(updatePluginRoot) || DASHBOARD_VERSION;
+    const fresh =
+      cachedUpdateCheck && Date.now() - cachedUpdateCheck.checkedAt < 5 * 60_000
+        ? cachedUpdateCheck
+        : await checkUpdates();
+    if (!fresh.hasUpdate) {
+      return {
+        ok: true,
+        updated: false,
+        mode: 'sidecar',
+        currentVersion,
+        version: fresh.latestVersion,
+        releaseUrl: fresh.releaseUrl,
+      };
+    }
+    const res = await applySidecarUpdate({
+      pluginRoot: updatePluginRoot,
+      currentVersion,
+      tarballUrl: fresh.tarballUrl,
+      tagName: fresh.tagName,
+      fetchImpl: updateFetch,
+    });
+    cachedUpdateCheck = null;
+    return { ...res, mode: 'sidecar' };
+  }
+
   return {
     paths,
     syncManager,
@@ -663,6 +711,8 @@ export async function createDashboardService(options = {}) {
     updateSettings,
     getSettings,
     testSettings,
+    checkUpdates,
+    applyUpdate,
     getThemeCss,
     onSettingsUpdated(cb) {
       settingsListeners.add(cb);
@@ -771,6 +821,16 @@ export function createStandaloneHttpServer(service, options = {}) {
       if (url.pathname === '/api/settings/pick-folder' && req.method === 'POST') {
         const parsed = await readJsonBody(req, 4096).catch(() => ({}));
         sendJson(200, await pickNativeFolder(parsed.initialDir || '', parsed.language || 'zh-CN'));
+        return;
+      }
+
+      if (url.pathname === '/api/update/check' && req.method === 'GET') {
+        sendJson(200, await service.checkUpdates());
+        return;
+      }
+
+      if (url.pathname === '/api/update/apply' && req.method === 'POST') {
+        sendJson(200, await service.applyUpdate());
         return;
       }
 
@@ -1073,6 +1133,34 @@ async function startRuntime() {
     app.api(
       '/api/settings/pick-folder',
       async (data) => pickNativeFolder(data?.initialDir || '', data?.language || 'zh-CN'),
+      'POST'
+    );
+    app.api(
+      '/api/update/check',
+      async () => {
+        try {
+          return await service.checkUpdates();
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err?.message || 'Update check failed' }), {
+            status: 500,
+            contentType: 'application/json',
+          });
+        }
+      },
+      'GET'
+    );
+    app.api(
+      '/api/update/apply',
+      async () => {
+        try {
+          return await service.applyUpdate();
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err?.message || 'Update failed' }), {
+            status: 500,
+            contentType: 'application/json',
+          });
+        }
+      },
       'POST'
     );
 

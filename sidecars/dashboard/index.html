@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Antigravity Sync Dashboard</title>
   <script src="preload.js"></script>
-  <link rel="stylesheet" href="theme.css?v=1.7.1">
-  <link rel="stylesheet" href="styles.css?v=1.7.1">
+  <link rel="stylesheet" href="theme.css?v=1.8.0">
+  <link rel="stylesheet" href="styles.css?v=1.8.0">
 </head>
 <body>
   <div class="shell">
@@ -21,6 +21,7 @@
           <h1 class="brand-title" id="ui-title">Sync Dashboard</h1>
         </div>
         <div class="brand-actions">
+          <button type="button" class="tag accent update-pill" id="btn-update-pill" hidden></button>
           <span class="status-pill" id="sync-badge">--</span>
           <button type="button" class="icon-btn" id="btn-sync" aria-label="立即同步" title="立即同步">
             <span class="btn-label" id="ui-sync-label">同步</span>
@@ -156,12 +157,24 @@
             </div>
           </form>
 
+          <div class="subcard update-card" id="update-section">
+            <div class="subcard-head">
+              <span class="subcard-title" id="ui-update-section-title">版本与更新</span>
+              <button type="button" class="chip-btn" id="btn-check-update">检查更新</button>
+            </div>
+            <label class="update-toggle-row" for="chk-auto-update-check">
+              <span class="update-toggle-label" id="ui-label-auto-update">启动时自动检查更新</span>
+              <input class="toggle-switch" type="checkbox" role="switch" id="chk-auto-update-check" checked>
+            </label>
+            <div id="update-status-box" class="test-box update-box" hidden aria-live="polite"></div>
+          </div>
+
           <div class="diag-box" id="settings-diag"></div>
           </article>
         </div>
       </section>
     </main>
   </div>
-  <script src="app.js?v=1.7.1"></script>
+  <script src="app.js?v=1.8.0"></script>
 </body>
 </html>

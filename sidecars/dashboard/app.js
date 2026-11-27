@@ -147,6 +147,22 @@
       diagLastSync: '最近同步',
       diagVersion: '当前版本',
       diagSyncError: '同步错误',
+      updateSectionTitle: '版本与更新',
+      autoUpdateLabel: '启动时自动检查更新',
+      updateBadgeText: (v) => `新版本 v${v}`,
+      checkUpdateBtn: '检查更新',
+      checkingUpdateBtn: '检查中…',
+      applyUpdateBtn: '立即更新',
+      updatingBtn: '更新中…',
+      reloadWindowBtn: '重载窗口',
+      releaseNotesLink: '查看发布页',
+      updateUpToDate: (v) => `已是最新版本 (v${v})`,
+      updateAvailable: (latest, current) => `发现新版本 v${latest}（当前 v${current}）`,
+      updateDevRepoHint: '当前为源码开发目录，请使用 git pull 或前往发布页手动更新。',
+      updateAppliedSidecar: (v) => `已更新至 v${v}，刷新或重启插件面板后生效。`,
+      updateAppliedVscode: (v) => `已安装 v${v}，请重载窗口以启用新版本。`,
+      updateCheckFail: (msg) => `检查更新失败: ${msg}`,
+      updateApplyFail: (msg) => `更新失败: ${msg}`,
       ctxTitle: '活动对话',
       ctxActiveCount: (n) => `${n} 个活动`,
       ctxRunningCount: (n) => `${n} 个运行中`,
@@ -314,6 +330,22 @@
       diagLastSync: 'Last sync',
       diagVersion: 'Version',
       diagSyncError: 'Sync error',
+      updateSectionTitle: 'Version & Updates',
+      autoUpdateLabel: 'Check for updates on startup',
+      updateBadgeText: (v) => `v${v} available`,
+      checkUpdateBtn: 'Check for Updates',
+      checkingUpdateBtn: 'Checking…',
+      applyUpdateBtn: 'Update Now',
+      updatingBtn: 'Updating…',
+      reloadWindowBtn: 'Reload Window',
+      releaseNotesLink: 'Release Notes',
+      updateUpToDate: (v) => `You are up to date (v${v})`,
+      updateAvailable: (latest, current) => `Update available: v${latest} (current v${current})`,
+      updateDevRepoHint: 'Running from a git development checkout. Run git pull or update from the release page.',
+      updateAppliedSidecar: (v) => `Updated to v${v}. Refresh or restart the plugin panel to load it.`,
+      updateAppliedVscode: (v) => `Installed v${v}. Reload the window to apply.`,
+      updateCheckFail: (msg) => `Update check failed: ${msg}`,
+      updateApplyFail: (msg) => `Update failed: ${msg}`,
       ctxTitle: 'Active Sessions',
       ctxActiveCount: (n) => `${n} active`,
       ctxRunningCount: (n) => `${n} running`,
@@ -481,6 +513,22 @@
       diagLastSync: '最終同期',
       diagVersion: 'バージョン',
       diagSyncError: '同期エラー',
+      updateSectionTitle: 'バージョンと更新',
+      autoUpdateLabel: '起動時に自動で更新を確認',
+      updateBadgeText: (v) => `新バージョン v${v}`,
+      checkUpdateBtn: '更新を確認',
+      checkingUpdateBtn: '確認中…',
+      applyUpdateBtn: '今すぐ更新',
+      updatingBtn: '更新中…',
+      reloadWindowBtn: 'ウィンドウを再読み込み',
+      releaseNotesLink: 'リリースページ',
+      updateUpToDate: (v) => `最新バージョンです (v${v})`,
+      updateAvailable: (latest, current) => `新しいバージョン v${latest} があります（現在 v${current}）`,
+      updateDevRepoHint: '開発用 Git リポジトリで実行中のため、git pull またはリリースページから更新してください。',
+      updateAppliedSidecar: (v) => `v${v} に更新しました。パネルを再読み込みまたは再起動すると反映されます。`,
+      updateAppliedVscode: (v) => `v${v} をインストールしました。ウィンドウを再読み込みして反映してください。`,
+      updateCheckFail: (msg) => `更新確認に失敗しました: ${msg}`,
+      updateApplyFail: (msg) => `更新に失敗しました: ${msg}`,
       ctxTitle: 'アクティブな会話',
       ctxActiveCount: (n) => `${n} 件稼働中`,
       ctxRunningCount: (n) => `${n} 件実行中`,
@@ -533,6 +581,9 @@
     inFlightLoad: null,
     inFlightContextLoad: null,
     fullRefreshTimer: null,
+    updateState: null,
+    updating: false,
+    startupUpdateChecked: false,
   };
 
   const probeCtx = (() => {
@@ -837,6 +888,13 @@
     document.getElementById('ui-label-interval').textContent = dict.labelInterval;
     document.getElementById('ui-label-lang').textContent = dict.labelLang;
     document.getElementById('btn-save-settings').textContent = dict.saveBtn;
+    const updateTitleEl = document.getElementById('ui-update-section-title');
+    if (updateTitleEl) updateTitleEl.textContent = dict.updateSectionTitle;
+    const autoUpdateEl = document.getElementById('ui-label-auto-update');
+    if (autoUpdateEl) autoUpdateEl.textContent = dict.autoUpdateLabel;
+    const checkUpdateBtn = document.getElementById('btn-check-update');
+    if (checkUpdateBtn && !checkUpdateBtn.disabled) checkUpdateBtn.textContent = dict.checkUpdateBtn;
+    renderUpdateBox();
   }
 
   function renderTopStatus(data) {
@@ -1947,6 +2005,10 @@
     const devNameInput = document.getElementById('input-devicename');
     const intervalInput = document.getElementById('input-interval');
     const langSelect = document.getElementById('input-lang');
+    const autoUpdateChk = document.getElementById('chk-auto-update-check');
+    if (autoUpdateChk && !autoUpdateChk.disabled) {
+      autoUpdateChk.checked = settings.checkUpdatesOnStartup !== false;
+    }
 
     const hasSavedPass = Boolean(settings.webdav?.hasPassword) && !state.clearPassword;
     davPassInput.placeholder = hasSavedPass ? dict.passPlaceholderSaved : dict.passPlaceholderNew;
@@ -2160,6 +2222,190 @@
     box.textContent = message;
   }
 
+  function safeExternalUrl(url) {
+    return typeof url === 'string' && /^https:\/\//i.test(url) ? url : '';
+  }
+
+  function renderUpdateBox() {
+    const dict = t();
+    const u = state.updateState;
+    const hasAvail = u?.kind === 'checked' && Boolean(u.info?.hasUpdate);
+    const pill = document.getElementById('btn-update-pill');
+    if (pill) {
+      pill.hidden = !hasAvail;
+      if (hasAvail) pill.textContent = dict.updateBadgeText(u.info.latestVersion);
+    }
+    const settingsTab = document.getElementById('tab-settings');
+    if (settingsTab) {
+      settingsTab.classList.toggle('has-update', hasAvail);
+    }
+
+    const box = document.getElementById('update-status-box');
+    if (!box) return;
+    if (!u) {
+      box.hidden = true;
+      box.textContent = '';
+      return;
+    }
+
+    box.hidden = false;
+    box.textContent = '';
+
+    if (u.kind === 'error') {
+      box.className = 'test-box update-box err';
+      box.appendChild(el('div', { text: u.message }));
+      return;
+    }
+
+    if (u.kind === 'applied') {
+      box.className = 'test-box update-box ok';
+      const msg = u.canReloadWindow
+        ? dict.updateAppliedVscode(u.version)
+        : dict.updateAppliedSidecar(u.version);
+      box.appendChild(el('div', { text: msg }));
+      if (u.canReloadWindow) {
+        const actions = el('div', { class: 'update-actions' });
+        const reloadBtn = el('button', { type: 'button', class: 'primary-btn', text: dict.reloadWindowBtn });
+        reloadBtn.addEventListener('click', () => {
+          void requestJson('/api/update/reload', { method: 'POST', body: '{}' }).catch(() => {});
+        });
+        actions.appendChild(reloadBtn);
+        box.appendChild(actions);
+      }
+      return;
+    }
+
+    const info = u.info;
+    if (!info.hasUpdate) {
+      box.className = 'test-box update-box ok';
+      box.appendChild(el('div', { text: dict.updateUpToDate(info.currentVersion || info.latestVersion) }));
+      const href = safeExternalUrl(info.releaseUrl);
+      if (href) {
+        const actions = el('div', { class: 'update-actions' });
+        actions.appendChild(
+          el('a', {
+            class: 'chip-btn update-link',
+            href,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            text: dict.releaseNotesLink,
+          })
+        );
+        box.appendChild(actions);
+      }
+      return;
+    }
+
+    box.className = 'test-box update-box';
+    box.appendChild(el('div', { text: dict.updateAvailable(info.latestVersion, info.currentVersion) }));
+    if (info.notes) {
+      box.appendChild(el('div', { class: 'update-notes', text: info.notes }));
+    }
+    if (info.isDevRepo) {
+      box.appendChild(el('div', { class: 'field-hint', text: dict.updateDevRepoHint }));
+    }
+
+    const actions = el('div', { class: 'update-actions' });
+    if (info.canSelfUpdate) {
+      const applyBtn = el('button', {
+        type: 'button',
+        class: 'primary-btn',
+        id: 'btn-apply-update',
+        text: state.updating ? dict.updatingBtn : dict.applyUpdateBtn,
+      });
+      applyBtn.disabled = state.updating;
+      applyBtn.addEventListener('click', () => {
+        void runApplyUpdate();
+      });
+      actions.appendChild(applyBtn);
+    }
+    const href = safeExternalUrl(info.releaseUrl);
+    if (href) {
+      actions.appendChild(
+        el('a', {
+          class: 'chip-btn update-link',
+          href,
+          target: '_blank',
+          rel: 'noopener noreferrer',
+          text: dict.releaseNotesLink,
+        })
+      );
+    }
+    if (actions.childNodes.length > 0) {
+      box.appendChild(actions);
+    }
+  }
+
+  async function runCheckUpdates({ silent = false } = {}) {
+    const checkUpdateBtn = document.getElementById('btn-check-update');
+    if (!silent && checkUpdateBtn) {
+      checkUpdateBtn.disabled = true;
+      checkUpdateBtn.textContent = t().checkingUpdateBtn;
+    }
+    try {
+      const info = await requestJson('/api/update/check', { method: 'GET' });
+      if (!silent || info?.hasUpdate) {
+        state.updateState = { kind: 'checked', info };
+      }
+    } catch (err) {
+      if (!silent) {
+        state.updateState = {
+          kind: 'error',
+          message: t().updateCheckFail(err?.message || 'Error'),
+        };
+      }
+    } finally {
+      if (!silent && checkUpdateBtn) {
+        checkUpdateBtn.disabled = false;
+        checkUpdateBtn.textContent = t().checkUpdateBtn;
+      }
+      renderUpdateBox();
+    }
+  }
+
+  async function runApplyUpdate() {
+    if (state.updating) return;
+    state.updating = true;
+    renderUpdateBox();
+    try {
+      const res = await requestJson('/api/update/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (res?.updated) {
+        state.updateState = {
+          kind: 'applied',
+          version: res.version,
+          canReloadWindow: Boolean(res.canReloadWindow),
+        };
+      } else if (res?.openedExternal) {
+        state.updateState = {
+          kind: 'error',
+          message: t().updateApplyFail(res.error || 'Opened release page'),
+        };
+      } else {
+        state.updateState = {
+          kind: 'checked',
+          info: {
+            hasUpdate: false,
+            currentVersion: res?.currentVersion || res?.version || '',
+            latestVersion: res?.version || '',
+            releaseUrl: res?.releaseUrl || '',
+          },
+        };
+      }
+    } catch (err) {
+      state.updateState = {
+        kind: 'error',
+        message: t().updateApplyFail(err?.message || 'Error'),
+      };
+    } finally {
+      state.updating = false;
+      renderUpdateBox();
+    }
+  }
+
   function setupActions() {
     document.getElementById('btn-sync').addEventListener('click', () => {
       void triggerSync();
@@ -2288,6 +2534,48 @@
       void runTest('webdav', e.currentTarget, t().testWebdavBtn);
     });
 
+    const checkUpdateBtn = document.getElementById('btn-check-update');
+    if (checkUpdateBtn) {
+      checkUpdateBtn.addEventListener('click', () => {
+        void runCheckUpdates({ silent: false });
+      });
+    }
+
+    const autoUpdateChk = document.getElementById('chk-auto-update-check');
+    if (autoUpdateChk) {
+      autoUpdateChk.addEventListener('change', async () => {
+        const nextVal = Boolean(autoUpdateChk.checked);
+        autoUpdateChk.disabled = true;
+        try {
+          const res = await requestJson('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ checkUpdatesOnStartup: nextVal }),
+          });
+          if (state.dashboard?.settings) {
+            state.dashboard.settings.checkUpdatesOnStartup =
+              res?.settings?.checkUpdatesOnStartup ?? nextVal;
+          }
+          if (nextVal && !state.startupUpdateChecked) {
+            state.startupUpdateChecked = true;
+            void runCheckUpdates({ silent: true });
+          }
+        } catch {
+          autoUpdateChk.checked = !nextVal;
+        } finally {
+          autoUpdateChk.disabled = false;
+        }
+      });
+    }
+
+    const updatePill = document.getElementById('btn-update-pill');
+    if (updatePill) {
+      updatePill.addEventListener('click', () => {
+        document.getElementById('tab-settings')?.click();
+        document.getElementById('update-section')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    }
+
     settingsForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const saveBtn = document.getElementById('btn-save-settings');
@@ -2404,7 +2692,14 @@
   setupTabs();
   setupActions();
   startAutoRefresh();
-  void loadDashboard().catch((err) => {
+  void loadDashboard()
+    .then((data) => {
+      if (!state.startupUpdateChecked && data?.settings?.checkUpdatesOnStartup !== false) {
+        state.startupUpdateChecked = true;
+        void runCheckUpdates({ silent: true });
+      }
+    })
+    .catch((err) => {
     const root = document.getElementById('overview-root');
     root.textContent = '';
     root.appendChild(
